@@ -7,3 +7,14 @@ Some project goals...
 - affordable PCB with minimal easy to source components
 - easy to implement in current droid control systems (Padawan/Shadow/Kyber)
 - room on the hardware for advanced droid nonsense
+
+## Proof of Concept Hardware
+Breadboard circuit uses...
+- Raspberry Pi Pico 2 dev board
+- Generic microSD card holder
+- Generic PCM5102A I2S module
+- 1 momentary pushbutton
+
+MicroSD card should be loaded with two example audio files.
+- **test1.mp3** : a stereo music track
+- **test2.wav** : a mono droid beepboop
