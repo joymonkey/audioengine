@@ -1,16 +1,18 @@
-// Pico MP3 Trigger - v20250921_18
+// Pico MP3 Trigger - v20250921_28
 /*
  * A fully-featured, dual-core audio player for the Raspberry Pi Pico,
  * designed to emulate and extend the functionality of the SparkFun MP3 Trigger.
  *
  * --- Functional Summary ---
- * - SparkFun INI Compatibility: Now parses the INI file using the '#' prefix
- * and space delimiters, exactly like the original MP3 Trigger.
- * - Dual-Core Operation: Plays MP3s on Core 1, handles mixing/UI on Core 0 for smooth performance.
  * - MP3 & WAV Playback: Plays standard MP3 files and both mono and stereo 16-bit WAV files.
  * - Advanced Audio Mixing: Can mix a WAV over an MP3. Stopping the MP3 will
  * not interrupt the WAV, which will continue playing over a silent background.
  * - Flexible Filename Matching: Triggers files that START WITH a 3-digit number (e.g., "005_sound.mp3").
+ * - Self-Sufficient: Automatically creates a valid "000SILENCE.MP3" file on
+ * the SD card if it is missing, using a frame-by-frame generation method.
+ * - MP3TRIGR.INI Compatibility: Parses the INI file using the '#' prefix
+ * and space delimiters, exactly like the original MP3 Trigger.
+ * - Dual-Core Operation: Plays MP3s on Core 1, handles mixing/UI on Core 0 for smooth performance.
  * - SD Card File Caching: Scans and caches all track filenames on startup for instant track triggering.
  * - Self-Healing INI File: Reads 'MP3TRIGR.INI' for settings. Creates the file with defaults
  * and adds any missing keys if needed, preserving comments and structure.
@@ -43,7 +45,7 @@
 #include <I2S.h>
 #include "pico/mutex.h"
 
-#define VERSION_STRING "v20250921_18"
+#define VERSION_STRING "v20250921_28"
 
 using namespace libhelix;
 
@@ -397,25 +399,25 @@ void parseIniFile() {
   bool baudFound = false;
   bool attenFound = false;
   bool modeFound = false;
-  char iniBuffer[513]; // 512 + null terminator
+  char iniBuffer[1025]; // Increased buffer size
   char newSettings[200] = "";
   
   mutex_enter_blocking(&sd_mutex);
   FsFile iniFile = sd.open("MP3TRIGR.INI", FILE_READ);
   
   if (iniFile) {
-    log_message("Reading MP3TRIGR.INI...");
-    int bytesRead = iniFile.read(iniBuffer, 512);
+    if (boardMode == 2) log_message("Reading MP3TRIGR.INI...");
+    int bytesRead = iniFile.read(iniBuffer, 1024);
     iniBuffer[bytesRead] = '\0';
     iniFile.close();
     
     char* line = strtok(iniBuffer, "\r\n");
     while(line != NULL) {
-      if (line[0] == '*') break; // Stop parsing at asterisk
+      if (line[0] == '*') break;
 
       if (line[0] == '#') {
-        char* command = line + 1; // Skip '#'
-        while (*command == ' ') command++; // Skip spaces
+        char* command = line + 1;
+        while (*command == ' ') command++;
         
         if (strncasecmp(command, "BAUD", 4) == 0) {
           serialBaud = atol(command + 4);
@@ -434,21 +436,18 @@ void parseIniFile() {
     }
 
     if (!baudFound || !attenFound || !modeFound) {
-      log_message("One or more settings missing, updating INI file...");
+      if (boardMode == 2) log_message("One or more settings missing, updating INI file...");
       if (!baudFound) strcat(newSettings, "#BAUD 115200\r\n");
       if (!attenFound) strcat(newSettings, "#ATTEN 97\r\n");
       if (!modeFound) strcat(newSettings, "#MODE 1\r\n");
       
-      // Re-read original file to reconstruct it
       iniFile = sd.open("MP3TRIGR.INI", FILE_READ);
-      bytesRead = iniFile.read(iniBuffer, 512);
+      bytesRead = iniFile.read(iniBuffer, 1024);
       iniBuffer[bytesRead] = '\0';
       iniFile.close();
       
-      // Prepend new settings to original content
       strcat(newSettings, iniBuffer);
 
-      // Write it all back
       iniFile = sd.open("MP3TRIGR.INI", FILE_WRITE | O_TRUNC);
       if(iniFile) {
         iniFile.print(newSettings);
@@ -590,7 +589,65 @@ void triggerTrack(int trackNumber, bool shouldInterrupt, bool needsResponse) {
   }
 }
 
+// Function to create the silent MP3 if it's missing
+bool createMinimalSilenceMP3(const char* filename) {
+  FsFile file;
+  mutex_enter_blocking(&sd_mutex);
+  bool success = file.open(filename, O_WRONLY | O_CREAT | O_TRUNC);
+  mutex_exit(&sd_mutex);
+
+  if (!success) {
+    log_message("Failed to open file for writing: " + String(filename));
+    return false;
+  }
+  
+  log_message("Creating file: " + String(filename));
+  
+  // MP3 frame for 32kbps mono at 44.1kHz
+  // Frame size calculation: 144 * bitrate / sample_rate = 144 * 32000 / 44100 ≈ 104 bytes per frame
+  const uint8_t mp3FrameHeader[] = { 0xFF, 0xFA, 0x40, 0x00 };
+  
+  // Create a ~1 second file for robustness
+  const int framesToCreate = 43;  // ~1 second worth of frames
+  const int frameSize = 104;         
+  const int dataSize = frameSize - 4;
+  
+  for (int frame = 0; frame < framesToCreate; frame++) {
+    mutex_enter_blocking(&sd_mutex);
+    file.write(mp3FrameHeader, 4);
+    for (int i = 0; i < dataSize; i++) {
+      file.write((uint8_t)0x00);
+    }
+    mutex_exit(&sd_mutex);
+  }
+  
+  mutex_enter_blocking(&sd_mutex);
+  file.close();
+  mutex_exit(&sd_mutex);
+
+  log_message("Successfully created " + String(filename));
+  return true;
+}
+
+void ensureSilenceFileExists() {
+  mutex_enter_blocking(&sd_mutex);
+  bool exists = sd.exists("000SILENCE.MP3");
+  mutex_exit(&sd_mutex);
+
+  if (!exists) {
+    log_message("000SILENCE.MP3 not found, creating it...");
+    if (!createMinimalSilenceMP3("000SILENCE.MP3")) {
+      log_message("FATAL ERROR: Could not create 000SILENCE.MP3!");
+      while(true) { // Halt
+        digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+        delay(100);
+      }
+    }
+  }
+}
+
 void setup() {
+  delay(100);
   pinMode(LED_PIN, OUTPUT);
   pinMode(FWD_PIN, INPUT_PULLUP);
   pinMode(REV_PIN, INPUT_PULLUP);
@@ -609,10 +666,21 @@ void setup() {
   }
 
   Serial.begin(serialBaud); 
-  if (boardMode == 2) {
-    while(!Serial && millis() < 5000); // Wait for connection in dev mode, with a timeout
-  }
+  long initialBaud = serialBaud;
+  
+  // This must be run before parsing INI in case developer mode is on
   parseIniFile();
+  
+  if (serialBaud != initialBaud) {
+    Serial.end();
+    Serial.begin(serialBaud);
+  }
+
+  if (boardMode == 2) {
+    while(!Serial && millis() < 5000);
+  }
+  
+  ensureSilenceFileExists();
   
   if (boardMode == 2) {
     Serial.println("\n--- Pico MP3 Trigger " VERSION_STRING " ---");
