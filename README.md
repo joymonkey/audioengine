@@ -1,4 +1,4 @@
-# RSeries Audio Engine
+# CHIRP Audio Engine
 Hardware and firmware for a new sound file playing/mixing PCB. Perfectly suited for Droid Builder use in an Astromech droid.
 
 Some project goals...
