@@ -1,7 +1,7 @@
 # CHIRP Audio Trigger
 Here are the design files for the CHIRP Audio Trigger, documentation as well as the Arduino code that runs on it.
 
-# Initial Project Details
+# Initial Audio Engine Details
 Hardware and firmware for a new sound file playing/mixing PCB. Perfectly suited for Droid Builder use in an Astromech droid.
 
 Some project goals...
