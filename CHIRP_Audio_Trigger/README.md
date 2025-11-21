@@ -13,7 +13,7 @@ Some project goals...
 
 ## Proof of Concept Hardware
 Breadboard circuit uses...
-- Raspberry Pi Pico 2 dev board
+- Raspberry Pi Pico 2 dev board (later a Pimoroni Pico Plus 2 for its 16MB flash and 8PM PSRAM)
 - Generic microSD card holder
 - Generic PCM5102A I2S module
 - 1 momentary pushbutton
