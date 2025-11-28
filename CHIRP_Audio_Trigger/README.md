@@ -1,12 +1,11 @@
 # CHIRP Audio Trigger
-Here are the design files for the CHIRP Audio Trigger, documentation as well as the Arduino code that runs on it.
+The CHIRP Audio Trigger is a sound file player similar to the trusty Sparkfun/Robertsonics MP3 Trigger board. Functionality is focused on using the CHIRP Audio Trigger as the sound system for an Astromech droid, but it is also very usable as a general sound player for other projects, and is a fun platform to experiment with audio playback a processing programming. The stock firmware can read the contents of the SD card and provide a droids primary microcontroller with a manifest of sounds - allowing sound names to be sent to the operators radio transmitter and displayed as telemetry on the transmitters GUI.
 
 # Initial Audio Engine Details
 Hardware and firmware for a new sound file playing/mixing PCB. Perfectly suited for Droid Builder use in an Astromech droid.
 
 Some project goals...
-- play and mix multiple audio filetype (initially stereo MP3 and mono WAV)
-- also take an external audio input (such as [HCR Vocalizer](https://humancyborgrelations.com/r2d2/)) and mix with gain adjustment
+- play and mix multiple audio filetypes (initially stereo MP3 and mono WAV)
 - affordable PCB with minimal easy to source components
 - easy to implement in current droid control systems (Padawan/Shadow/Kyber)
 - room on the hardware for advanced droid nonsense
