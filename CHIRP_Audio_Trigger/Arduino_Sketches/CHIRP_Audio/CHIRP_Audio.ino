@@ -1,18 +1,81 @@
 /*
- * CHIRP Audio Engine
+ * CHIRP Audio Trigger
  * Version: 20251128
  * 
  * Description:
- * Multi-stream audio playback engine for RP2350 (Pimoroni Pico Plus 2).
+ * Multi-stream audio playback engine for RP2350.
  * Supports simultaneous playback of up to 3 streams (WAV or MP3).
+ * Sound file manifest handling; so your droid knows what sounds are available.
  * 
  * Features:
  * - 3 Independent Audio Streams
+ * - Supports new CHIRP serial commands and legacy MP3 Trigger commands
  * - Dual MP3 Decoders (Helix) running on Core 0
  * - Ring Buffers in PSRAM (512KB per stream) for glitch-free playback
  * - Automatic mixing on Core 1
  * - Dynamic resource allocation for decoders
  * - Robust WAV/MP3 file handling with auto-stop
+ *
+ * File Format Notes:
+ * The system expects sound files to have a 44.1 kHz sample rate (CD quality).
+ * Most files you come across will be at this rate, but 48 kHz files have become more
+ * common of late. I recommend resampling any 48 kHz files prior to trying to play them
+ * with the CHIRP Audio Trigger. It will play 48kHz, but then will be slowed ~92% and not
+ * sound good.
+ * To keep filesizes down, it's recommended to use mono WAV files. Stereo MP3's are fine.
+ *
+ * SD Card Structure for Droid Use:
+ * Files can be stored similarly to Padawan/MP3 Trigger, but to take full advantage
+ * of the CHIRP Droid Control system can be structed into Sound Bank folders. This allows
+ * droid operators to easily update sounds on the droid by re-arranging the SD card,
+ * without a need to adjust any code.
+ * The system supports up to 6 sound banks, each can have numerous "pages" of sounds.
+ * Sound Bank 1 is for the droids primary vocals. These should all be WAV files, and total
+ * no more than 14MB. Files starting with similar characters but ending with consecutive
+ * numbers will be considered as a sound variant group, and when triggered a single variant
+ * will be randomly chosen from the group.
+ * For example these 6 files are considered to be only 3 sounds...
+ *   SD:/1A_R2D2/beep_01.wav
+ *   SD:/1A_R2D2/beep_02.wav
+ *   SD:/1A_R2D2/beep_03.wav
+ *   SD:/1A_R2D2/disagree.wav
+ *   SD:/1A_R2D2/happy_01.wav
+ *   SD:/1A_R2D2/happy_02.wav
+ * Sound Bank 1 files are transfered from the SD card to flash memory at startup, allowing
+ * these sounds to always be available with minimal system overhead needed.
+ * Sound Banks 2-6 have looser rules. Files can still be grouped by ending similar sounds 
+ * with variant numbers, but the files can be MP3 or WAV format and of any filesize.
+ * Different pages of sounds are defined by the letter in the folder name following the
+ * Sound Bank number. File names should be kept short as possible while keeping them
+ * identifiable to the user. For example...
+ *   SD:/2A_SW-Music/ImpMarch.mp3
+ *   SD:/2A_SW-Music/RebelsMix.mp3
+ *   SD:/2B_SW-Clips/LeiaShort.wav
+ *   SD:/2B_SW-Clips/LeiaLong.mp3
+ *   SD:/3A_Effects/persicope01.mp3
+ *   SD:/3A_Effects/persicope02.mp3
+ *   SD:/3A_Effects/servo01.mp3
+ *   SD:/3A_Effects/servo02.mp3
+ * 
+ * CHIRP Serial Commands:
+ * PLAY : play a sound
+ * STOP : stop a stream or all streams
+ * VOLU : set volume from 0 (silent) to 99 (max)
+ * CHRP : play a basic sound chirp
+ * GMAN : Get Manifest of sound banks
+ * LIST : Get a list of Sound Banks and Pages
+ * GNME : Get Name of a sound in a provided sound bank and page
+ * STAT : display the Status of each stream
+ *
+ * Legacy MP3 Trigger Serial Commands:
+ * T : Trigger by sound file number (ASCII)
+ * t : Trigger by sound file number (binary)
+ * p : Trigger by file index (binary)
+ * v : Set volume by number (binary), 255=silent, 0=max
+ * O : Start/Stop currently selected track in the SD card root
+ * F : Play next track in the SD card root
+ * R : Play previous track in the SD card root
+ *
  */
 
 #include "config.h"
@@ -155,7 +218,7 @@ void setup() {
     // Parse INI file *before* scanning banks
     Serial.println("\n=== Reading CHIRP.INI ===");
     parseIniFile();
-    Serial.printf("Active Bank 1 Variant set to: %c\n", activeBank1Variant);
+    Serial.printf("Active Bank 1 Page set to: %c\n", activeBank1Page);
                   
     // Scan Bank 1 on SD
     Serial.println("\n=== Scanning Bank 1 (SD Card) ===");
@@ -183,7 +246,7 @@ void setup() {
     for (int i = 0; i < sdBankCount; i++) {
         Serial.printf("  Bank %d%c: %s (%d files)\n",
                      sdBanks[i].bankNum,
-                     sdBanks[i].variant ? sdBanks[i].variant : ' ',
+                     sdBanks[i].page ? sdBanks[i].page : ' ',
                      sdBanks[i].dirName,
                      sdBanks[i].fileCount);
     }
@@ -197,13 +260,13 @@ void setup() {
     
     Serial.println("\n=== System Ready ===");
     Serial.println("Serial Commands (9600 baud):");
-    Serial.println("  PLAY:0,1,,5,75   Play Bank 1, Sound 5, Stream 0, Vol 75");
-    Serial.println("  PLAY:1,2,A,1,80  Play Bank 2A, Track 1, Stream 1, Vol 80");
+    Serial.println("  PLAY:1,,5,75   Play Bank 1, Sound 5, Vol 75");
+    Serial.println("  PLAY:2,B,1,80  Play Bank 2, Page B, Sound 1, Vol 80");
     Serial.println("  STOP:0           Stop stream 0");
     Serial.println("  STOP:* Stop all streams");
     Serial.println("  VOLU:1,50        Set stream 1 volume to 50");
     Serial.println("  LIST             List all banks");
-    Serial.println("  TONE             Toggle 440Hz test tone");
+
     Serial.println();
     
     digitalWrite(LED_PIN, HIGH);
@@ -213,8 +276,10 @@ void setup() {
 // LOOP (Core 0)
 // ===================================
 void loop() {
+    #ifdef DEBUG
     static uint32_t maxLoopTime = 0;
     uint32_t startMicros = micros();
+    #endif
     
     // Handle serial commands
     processSerialCommands(Serial);   // USB debug

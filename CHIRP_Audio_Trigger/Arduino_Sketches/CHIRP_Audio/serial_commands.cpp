@@ -21,7 +21,7 @@ volatile int16_t masterAttenMultiplier = (97 * 256) / 100; // Default 97%
 SoundFile bank1Sounds[MAX_SOUNDS];
 int bank1SoundCount = 0;
 char bank1DirName[64] = "";
-char activeBank1Variant = 'A'; 
+char activeBank1Page = 'A'; 
 
 // SD Banks Structure (Banks 2-6)
 SDBank sdBanks[MAX_SD_BANKS];
@@ -196,35 +196,13 @@ bool checkAndHandleMp3Command(Stream &s, uint8_t firstByte) {
         // ----------------------------------------------------------
         
         case 'T': // Trigger (ASCII): 'T' + '1'-'9'
-            // CONFLICT CHECK: "TONE" command also starts with 'T'.
-            // We peek at the next byte to decide.
-            // If next byte is 'O' (from TONE), we return false (not handled).
-            // If next byte is '1'-'9', we handle it.
-            // If no byte available yet, we wait briefly.
-            {
-                // Wait a tiny bit for the next char if not immediately available
-                unsigned long start = millis();
-                while (s.available() == 0 && millis() - start < 5) {
-                    delay(1);
-                }
-                
-                if (s.available()) {
-                    int next = s.peek();
-                    if (next == 'O') {
-                        // It's likely "TONE", let the main parser handle 'T'
-                        return false; 
-                    }
-                }
-                
-                // If we are here, it's likely a legacy 'T' command
-                if (waitForByte(s, arg)) {
-                    if (arg >= '0' && arg <= '9') {
-                        action_playTrackById(arg - '0'); 
-                        return true;
-                    }
+            if (waitForByte(s, arg)) {
+                if (arg >= '0' && arg <= '9') {
+                    action_playTrackById(arg - '0'); 
+                    return true;
                 }
             }
-            return false; // Fallback if timeout or invalid arg
+            return false;
 
         case 't': // Trigger (Binary): 't' + 0-255
             if (waitForByte(s, arg)) {
@@ -307,11 +285,11 @@ void processSerialCommands(Stream &serial) {
                 // PLAY Command
                 if (strncmp(cmdBuffer, "PLAY:", 5) == 0) {
                     int stream, bank, volume, index;
-                    char variant;
+                    char page;
                     
                     char* ptr = cmdBuffer + 5;
                     
-                    // NEW FORMAT: PLAY:bank,variant,index,volume
+                    // NEW FORMAT: PLAY:bank,page,index,volume
                     // Auto-select stream
                     stream = getNextAvailableStream();
                     
@@ -321,9 +299,9 @@ void processSerialCommands(Stream &serial) {
                     ptr++;
                     
                     if (*ptr == ',') {
-                        variant = 0; 
+                        page = 0; 
                     } else if (*ptr >= 'A' && *ptr <= 'Z') {
-                        variant = *ptr;
+                        page = *ptr;
                         ptr++;
                         if (*ptr != ',') goto play_error;
                     } else {
@@ -369,11 +347,14 @@ void processSerialCommands(Stream &serial) {
                             char fullPath[80];
                             snprintf(fullPath, sizeof(fullPath), "/flash/%s", filename);
                             
+                            // Give Core time to switch from TX to RX before replying
+                            delay(50);
+                            // Send acknowledgement BEFORE starting stream to avoid CPU/Audio interference
+                            serial.println("PACK:PLAY");
+                            serial.printf("S:%d,ply,%d\n", stream, volume);
+
                             if (startStream(stream, fullPath)) {
                                 streams[stream].volume = (float)volume / 99.0f;
-                                serial.println("PACK:PLAY");
-                                serial.printf("STRM:%d,playing,%s,%d\n", 
-                                             stream, bank1Sounds[index - 1].basename, volume);
                             } else {
                                 serial.println("ERR:NOFILE");
                             }
@@ -382,17 +363,21 @@ void processSerialCommands(Stream &serial) {
                         }
                     }
                     else if (bank >= 2 && bank <= 6) {
-                        const char* filename = getSDFile(bank, variant, index);
+                        const char* filename = getSDFile(bank, page, index);
                         if (filename) {
-                            SDBank* sdBank = findSDBank(bank, variant);
+                            SDBank* sdBank = findSDBank(bank, page);
                             char fullPath[128];
                             snprintf(fullPath, sizeof(fullPath), "/%s/%s", 
                                     sdBank->dirName, filename);
                             
+                            // Give Core time to switch from TX to RX before replying
+                            delay(50);
+                            // Send acknowledgement BEFORE starting stream to avoid CPU/Audio interference
+                            serial.println("PACK:PLAY");
+                            serial.printf("S:%d,ply,%d\n", stream, volume);
+
                             if (startStream(stream, fullPath)) {
                                 streams[stream].volume = (float)volume / 99.0f;
-                                serial.println("PACK:PLAY");
-                                serial.printf("STRM:%d,playing,%s,%d\n", stream, filename, volume);
                             } else {
                                 serial.println("ERR:NOFILE");
                             }
@@ -408,7 +393,7 @@ void processSerialCommands(Stream &serial) {
                     
                     if (false) {
                     play_error:
-                        serial.println("ERR:PARAM - Format: PLAY:bank,variant,index,volume");
+                        serial.println("ERR:PARAM - Format: PLAY:bank,page,index,volume");
                     }
                 }
                 
@@ -419,27 +404,27 @@ void processSerialCommands(Stream &serial) {
                         for (int i = 0; i < MAX_STREAMS; i++) {
                             stopStream(i);
                             serial.println("PACK:STOP");
-                            serial.printf("STRM:%d,idle,,0\n", i);
+                            serial.printf("S:%d,idle,,0\n", i);
                         }
                     } else {
                         int stream = target - '0';
                         if (stream >= 0 && stream < MAX_STREAMS) {
                             stopStream(stream);
                             serial.println("PACK:STOP");
-                            serial.printf("STRM:%d,idle,,0\n", stream);
+                            serial.printf("S:%d,idle,,0\n", stream);
                         } else {
                             serial.println("ERR:PARAM - Invalid stream");
                         }
                     }
                 }
 
-                // CHIRP Command (NEW - FIXED)
-                else if (strncmp(cmdBuffer, "CHIRP:", 6) == 0) {
-                    // Format: CHIRP:StartHz,EndHz,DurationMs,Volume
+                // CHRP Command (Renamed from CHIRP)
+                else if (strncmp(cmdBuffer, "CHRP:", 5) == 0) {
+                    // Format: CHRP:StartHz,EndHz,DurationMs,Volume
                     
                     // FIX: Declare all variables at the TOP of the block
                     // to avoid jumping over initializers.
-                    char* ptr = cmdBuffer + 6;
+                    char* ptr = cmdBuffer + 5;
                     int start = atoi(ptr);
                     int end = 0;
                     int ms = 0;
@@ -460,11 +445,11 @@ void processSerialCommands(Stream &serial) {
                     
                     // Call the function
                     playChirp(start, end, ms, vol);
-                    serial.println("PACK:CHIRP");
+                    serial.println("PACK:CHRP");
                     
                     if (false) {
                         chirp_error:
-                        serial.println("ERR:PARAM - Format: CHIRP:start,end,ms,vol");
+                        serial.println("ERR:PARAM - Format: CHRP:start,end,ms,vol");
                     }
                 }
                 
@@ -505,9 +490,9 @@ void processSerialCommands(Stream &serial) {
                     serial.printf("Sounds: %d\n", bank1SoundCount);
                     for (int i = 0; i < bank1SoundCount && i < 10; i++) {
                         serial.printf("  %2d. %s (%d variants)\n",
-                                     i + 1,
-                                     bank1Sounds[i].basename,
-                                     bank1Sounds[i].variantCount);
+                                      i + 1,
+                                      bank1Sounds[i].basename,
+                                      bank1Sounds[i].variantCount);
                     }
                     if (bank1SoundCount > 10) {
                         serial.printf("  ... and %d more\n", bank1SoundCount - 10);
@@ -516,10 +501,10 @@ void processSerialCommands(Stream &serial) {
                     serial.println("\n=== Banks 2-6 (SD) ===");
                     for (int i = 0; i < sdBankCount; i++) {
                         serial.printf("Bank %d%c: %s (%d files)\n",
-                                     sdBanks[i].bankNum,
-                                     sdBanks[i].variant ? sdBanks[i].variant : ' ',
-                                     sdBanks[i].dirName,
-                                     sdBanks[i].fileCount);
+                                      sdBanks[i].bankNum,
+                                      sdBanks[i].page ? sdBanks[i].page : ' ',
+                                      sdBanks[i].dirName,
+                                      sdBanks[i].fileCount);
                     }
                     serial.println();
                 }
@@ -527,23 +512,39 @@ void processSerialCommands(Stream &serial) {
                 // GMAN Command (with MSUM)
                 else if (strcmp(cmdBuffer, "GMAN") == 0) {
                     serial.printf("MDAT:%d\n", sdBankCount + 1);
+                    if (&serial == &Serial2) Serial.printf("MDAT:%d\n", sdBankCount + 1);
+
                     serial.printf("BANK:1,,%d\n", bank1SoundCount);
-                    
+                    if (&serial == &Serial2) Serial.printf("BANK:1,,%d\n", bank1SoundCount);
+
+                    //serial.flush();
+                    delay(20);
                     for (int i = 0; i < sdBankCount; i++) {
                         serial.printf("BANK:%d,%c,%d\n",
                                      sdBanks[i].bankNum,
-                                     sdBanks[i].variant ? sdBanks[i].variant : ',',
+                                     sdBanks[i].page ? sdBanks[i].page : ',',
                                      sdBanks[i].fileCount);
+                        if (&serial == &Serial2) {
+                            Serial.printf("BANK:%d,%c,%d\n",
+                                     sdBanks[i].bankNum,
+                                     sdBanks[i].page ? sdBanks[i].page : ',',
+                                     sdBanks[i].fileCount);
+                        }
+                        //serial.flush();
+                        delay(20);             
                     }
                     
                     serial.printf("MSUM:%lu\n", globalFilenameChecksum);
+                    if (&serial == &Serial2) Serial.printf("MSUM:%lu\n", globalFilenameChecksum);
+
                     serial.println("MEND");
+                    if (&serial == &Serial2) Serial.println("MEND");
                 }
                 
                 // GNME Command (with new parser and .wav fix)
                 else if (strncmp(cmdBuffer, "GNME:", 5) == 0) {
                     int bank, index;
-                    char variant = 0;
+                    char page = 0;
                     char* ptr = cmdBuffer + 5; // e.g., "2,A,5" or "1,,1" or "1,A,1"
 
                     // 1. Get Bank
@@ -552,11 +553,11 @@ void processSerialCommands(Stream &serial) {
                     if (!ptr) goto gnme_error;
                     ptr++; // ptr is now "A,5" or ",1"
 
-                    // 2. Get Variant
+                    // 2. Get Page
                     if (*ptr == ',') {
-                        variant = 0; // Empty variant
+                        page = 0; // Empty page
                     } else {
-                        variant = *ptr;
+                        page = *ptr;
                         ptr = strchr(ptr, ','); // Find next comma
                         if (!ptr) goto gnme_error;
                     }
@@ -576,15 +577,16 @@ void processSerialCommands(Stream &serial) {
                     }
                     else if (bank >= 2 && bank <= 6 && index >= 1) {
                         // For Banks 2-6, we send the *full filename*
-                        const char* filename = getSDFile(bank, variant, index);
+                        const char* filename = getSDFile(bank, page, index);
                         if (filename) {
                             serial.printf("NAME:%d,%c,%d,%s\n",
-                                         bank, variant == 0 ? ',' : variant, 
+                                         bank, page == 0 ? ',' : page, 
                                          index, filename);
                         } else {
                             serial.printf("NAME:%d,%c,%d,INVALID\n",
-                                         bank, variant == 0 ? ',' : variant, index);
+                                         bank, page == 0 ? ',' : page, index);
                         }
+                        delay(20);
                     }
                     else {
                         goto gnme_error;
@@ -592,7 +594,7 @@ void processSerialCommands(Stream &serial) {
                     
                     if (false) {
                     gnme_error:
-                         serial.println("ERR:PARAM - Format: GNME:bank,variant,index");
+                         serial.println("ERR:PARAM - Format: GNME:bank,page,index");
                     }
                 }
                 
@@ -609,18 +611,6 @@ void processSerialCommands(Stream &serial) {
                         }
                     } else {
                         serial.println("ERR:PARAM - Invalid stream");
-                    }
-                }
-                
-                // TONE Command
-                else if (strcmp(cmdBuffer, "TONE") == 0) {
-                    if (!testToneActive) {
-                         testToneActive = true;
-                         testTonePhase = 0;
-                        serial.println("Test tone ON (440Hz)");
-                    } else {
-                        testToneActive = false;
-                        serial.println("Test tone OFF");
                     }
                 }
                 

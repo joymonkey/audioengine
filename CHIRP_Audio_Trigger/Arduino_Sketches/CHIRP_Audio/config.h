@@ -72,7 +72,7 @@ struct SoundFile {
 
 struct SDBank {
     uint8_t bankNum;
-    char variant;
+    char page;
     char dirName[32];
     char files[MAX_FILES_PER_BANK][64];
     int fileCount;
@@ -98,7 +98,7 @@ extern mutex_t log_mutex;
 extern SoundFile bank1Sounds[MAX_SOUNDS];
 extern int bank1SoundCount;
 extern char bank1DirName[64]; 
-extern char activeBank1Variant;
+extern char activeBank1Page;
 extern SDBank sdBanks[MAX_SD_BANKS];
 extern int sdBankCount;
 
@@ -230,8 +230,8 @@ void scanBank1();
 bool syncBank1ToFlash();
 void scanSDBanks();
 void scanRootTracks();
-SDBank* findSDBank(uint8_t bank, char variant);
-const char* getSDFile(uint8_t bank, char variant, int index);
+SDBank* findSDBank(uint8_t bank, char page);
+const char* getSDFile(uint8_t bank, char page, int index);
 
 // from audio_playback.cpp
 // from audio_playback.cpp

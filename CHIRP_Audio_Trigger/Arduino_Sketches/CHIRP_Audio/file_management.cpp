@@ -21,12 +21,23 @@ void parseIniFile() {
                 char* command = buffer + 1;
                 while (*command == ' ') command++; // trim leading space after #
 
-                if (strncasecmp(command, "BANK1_VARIANT", 13) == 0) {
+                if (strncasecmp(command, "BANK1_PAGE", 10) == 0) {
                     char* value = strchr(command, ' ');
                     if (value) {
                         while (*(++value) == ' '); // Find first char of value
                         if (*value >= 'A' && *value <= 'Z') {
-                            activeBank1Variant = *value;
+                            activeBank1Page = *value;
+                            found = true;
+                        }
+                    }
+                }
+                // Legacy support for BANK1_VARIANT
+                else if (strncasecmp(command, "BANK1_VARIANT", 13) == 0) {
+                    char* value = strchr(command, ' ');
+                    if (value) {
+                        while (*(++value) == ' '); // Find first char of value
+                        if (*value >= 'A' && *value <= 'Z') {
+                            activeBank1Page = *value;
                             found = true;
                         }
                     }
@@ -41,9 +52,9 @@ void parseIniFile() {
         iniFile = sd.open("CHIRP.INI", FILE_WRITE | O_TRUNC);
         if (iniFile) {
             iniFile.println("# CHIRP Configuration File");
-            iniFile.println("# Set the active Bank 1 variant (A-Z)");
+            iniFile.println("# Set the active Bank 1 page (A-Z)");
             iniFile.println("# This selects which '1X_...' directory to sync to flash.");
-            iniFile.printf("#BANK1_VARIANT %c\n", activeBank1Variant); // Write default 'A'
+            iniFile.printf("#BANK1_PAGE %c\n", activeBank1Page); // Write default 'A'
             iniFile.close();
             Serial.println("CHIRP.INI not found or key missing, created with defaults.");
         } else {
@@ -54,14 +65,14 @@ void parseIniFile() {
 }
 
 // ===================================
-// Scan Bank 1 (Finds dir matching activeBank1Variant)
+// Scan Bank 1 (Finds dir matching activeBank1Page)
 // ===================================
 void scanBank1() {
     bank1SoundCount = 0;
     bank1DirName[0] = '\0'; // Clear the name
     
     char targetPrefix[4]; // "1A_"
-    snprintf(targetPrefix, sizeof(targetPrefix), "1%c_", activeBank1Variant);
+    snprintf(targetPrefix, sizeof(targetPrefix), "1%c_", activeBank1Page);
     
     mutex_enter_blocking(&sd_mutex);
     FsFile root = sd.open("/");
@@ -314,7 +325,7 @@ sync_complete:
 }
 
 // ===================================
-// Scan SD Banks (2-6 with optional variants)
+// Scan SD Banks (2-6 with optional pages)
 // ===================================
 void scanSDBanks() {
     sdBankCount = 0;
@@ -338,13 +349,13 @@ void scanSDBanks() {
                 dirName[0] >= '2' && dirName[0] <= '6') {
                 
                 uint8_t bankNum = dirName[0] - '0';
-                char variant = 0;
+                char page = 0;
                 
-                // Check for variant letter
+                // Check for page letter
                 if (strlen(dirName) >= 3 && 
                     dirName[1] >= 'A' && dirName[1] <= 'Z' &&
                     dirName[2] == '_') {
-                    variant = dirName[1];
+                    page = dirName[1];
                 }
                 else if (dirName[1] != '_') {
                     // Invalid format
@@ -356,7 +367,7 @@ void scanSDBanks() {
                 if (sdBankCount < MAX_SD_BANKS) {
                     SDBank* bank = &sdBanks[sdBankCount];
                     bank->bankNum = bankNum;
-                    bank->variant = variant;
+                    bank->page = page;
                     strncpy(bank->dirName, dirName, sizeof(bank->dirName) - 1);
                     bank->fileCount = 0;
                     
@@ -399,11 +410,11 @@ void scanSDBanks() {
 }
 
 // ===================================
-// Find SD Bank by number and variant
+// Find SD Bank by number and page
 // ===================================
-SDBank* findSDBank(uint8_t bank, char variant) {
+SDBank* findSDBank(uint8_t bank, char page) {
     for (int i = 0; i < sdBankCount; i++) {
-        if (sdBanks[i].bankNum == bank && sdBanks[i].variant == variant) {
+        if (sdBanks[i].bankNum == bank && sdBanks[i].page == page) {
             return &sdBanks[i];
         }
     }
@@ -413,8 +424,8 @@ SDBank* findSDBank(uint8_t bank, char variant) {
 // ===================================
 // Get File from SD Bank
 // ===================================
-const char* getSDFile(uint8_t bank, char variant, int index) {
-    SDBank* sdBank = findSDBank(bank, variant);
+const char* getSDFile(uint8_t bank, char page, int index) {
+    SDBank* sdBank = findSDBank(bank, page);
     if (!sdBank) return nullptr;
     
     if (index < 1 || index > sdBank->fileCount) return nullptr;
