@@ -421,3 +421,73 @@ const char* getSDFile(uint8_t bank, char variant, int index) {
     
     return sdBank->files[index - 1];
 }
+
+// ===================================
+// Scan Root Tracks (Legacy Compatibility)
+// ===================================
+void scanRootTracks() {
+    rootTrackCount = 0;
+    mutex_enter_blocking(&sd_mutex);
+    FsFile root = sd.open("/");
+    
+    if (!root || !root.isDirectory()) {
+        Serial.println("ERROR: Could not open root directory for legacy scan");
+        mutex_exit(&sd_mutex);
+        return;
+    }
+    
+    FsFile file;
+    while (file.openNext(&root, O_RDONLY)) {
+        if (!file.isDirectory()) {
+            char filename[64];
+            file.getName(filename, sizeof(filename));
+            
+            // Check for NNN.MP3 format (where NNN is 001 to 255)
+            // Sparkfun MP3 Trigger supports 001.MP3 to 255.MP3
+            // We will be lenient and accept any MP3/WAV in root, 
+            // OR strictly follow NNN?
+            // User said: "legacy command is sent that the user is trying to play a file in the root"
+            // Sparkfun "T" command maps 1 -> "001.MP3".
+            // So we should probably look for that specific format to be safe?
+            // Or just index EVERYTHING in root?
+            // If we index everything, "Next" works great.
+            // But "Track 1" might be "001.mp3" or "Ambient.mp3" depending on sort.
+            // Sparkfun sorts by filename.
+            // Let's index ALL audio files in root, and sort them later (or assume FAT order).
+            // Actually, for "Track 1" to mean "001.MP3", we really should look for that specific file
+            // when requested by ID. 
+            // BUT, for "Next/Prev", we want to cycle through whatever is there.
+            
+            // Let's just index all valid audio files in root.
+            const char* ext = strrchr(filename, '.');
+            if (ext && (strcasecmp(ext, ".wav") == 0 ||
+                       strcasecmp(ext, ".mp3") == 0 ||
+                       strcasecmp(ext, ".aac") == 0 ||
+                       strcasecmp(ext, ".m4a") == 0)) {
+                
+                if (rootTrackCount < MAX_ROOT_TRACKS) {
+                    strncpy(rootTracks[rootTrackCount], filename, sizeof(rootTracks[0]) - 1);
+                    rootTrackCount++;
+                }
+            }
+        }
+        file.close();
+    }
+    root.close();
+    mutex_exit(&sd_mutex);
+    
+    // Sort the tracks alphabetically to ensure deterministic order
+    // (Bubble sort is fine for < 255 items)
+    for (int i = 0; i < rootTrackCount - 1; i++) {
+        for (int j = 0; j < rootTrackCount - i - 1; j++) {
+            if (strcasecmp(rootTracks[j], rootTracks[j+1]) > 0) {
+                char temp[16];
+                strncpy(temp, rootTracks[j], sizeof(temp));
+                strncpy(rootTracks[j], rootTracks[j+1], sizeof(rootTracks[j]));
+                strncpy(rootTracks[j+1], temp, sizeof(temp));
+            }
+        }
+    }
+    
+    Serial.printf("Found %d root tracks for legacy compatibility.\n", rootTrackCount);
+}

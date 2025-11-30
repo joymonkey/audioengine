@@ -12,8 +12,8 @@ using namespace libhelix;
 // ===================================
 // Constants
 // ===================================
-#define VERSION_STRING "20251119"
-#define DEBUG // Comment out to disable debug logging
+#define VERSION_STRING "20251128"
+//#define DEBUG // Comment out to disable debug logging
 
 // Hardware Configuration
 #define LED_PIN 25
@@ -101,6 +101,11 @@ extern char bank1DirName[64];
 extern char activeBank1Variant;
 extern SDBank sdBanks[MAX_SD_BANKS];
 extern int sdBankCount;
+
+// Root Tracks (Legacy Compatibility)
+#define MAX_ROOT_TRACKS 255
+extern char rootTracks[MAX_ROOT_TRACKS][16]; // "NNN.MP3"
+extern int rootTrackCount;
 
 // Test Tone State
 extern volatile bool testToneActive;
@@ -224,6 +229,7 @@ void parseIniFile();
 void scanBank1();
 bool syncBank1ToFlash();
 void scanSDBanks();
+void scanRootTracks();
 SDBank* findSDBank(uint8_t bank, char variant);
 const char* getSDFile(uint8_t bank, char variant, int index);
 
@@ -236,5 +242,13 @@ void fillStreamBuffers(); // Main loop task
 void initAudioSystem();
 // NEW: Prototype for the Chirp function
 void playChirp(int startFreq, int endFreq, int durationMs, uint8_t vol);
+
+// from serial_commands.cpp (MP3 Trigger Compat)
+void action_togglePlayPause();
+void action_playNext();
+void action_playPrev();
+void action_playTrackById(int trackNum);
+void action_playTrackByIndex(int trackIndex);
+void action_setSparkfunVolume(uint8_t sfVol);
 
 #endif // CONFIG_H

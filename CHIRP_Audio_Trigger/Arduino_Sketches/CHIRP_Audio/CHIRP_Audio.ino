@@ -1,6 +1,6 @@
 /*
  * CHIRP Audio Engine
- * Version: 20251119
+ * Version: 20251128
  * 
  * Description:
  * Multi-stream audio playback engine for RP2350 (Pimoroni Pico Plus 2).
@@ -17,6 +17,14 @@
 
 #include "config.h"
 #include <CRC32.h> // For checksum
+
+
+// ===================================
+// Button Configuration
+// ===================================
+#define PIN_BTN_NAV 16 // Start/Stop
+#define PIN_BTN_FWD 17 // Next
+#define PIN_BTN_REV 18 // Prev
 
 // ===================================
 // Global Variable Definitions
@@ -78,9 +86,17 @@ void setup() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
     
+    // Buttons
+    pinMode(PIN_BTN_NAV, INPUT_PULLUP);
+    pinMode(PIN_BTN_FWD, INPUT_PULLUP);
+    pinMode(PIN_BTN_REV, INPUT_PULLUP);
+
     // Initialize Audio System (Streams, Buffers, Flags)
     initAudioSystem();
     Serial.println("Audio System Initialized (3 Streams, 2 MP3 Decoders)");
+    
+    // Initialize Compat Layer (Moved to serial_commands.cpp, no setup needed)
+    // setupMp3TrigCompat(); 
 
     // Allocate MP3 decoders in PSRAM
     Serial.print("Allocating MP3 decoders in PSRAM... ");
@@ -175,6 +191,10 @@ void setup() {
     // Calculate checksum *after* all banks are scanned
     calculateGlobalChecksum();
     
+    // Scan Root Tracks for Legacy Compatibility
+    Serial.println("\n=== Scanning Root Tracks (Legacy) ===");
+    scanRootTracks();
+    
     Serial.println("\n=== System Ready ===");
     Serial.println("Serial Commands (9600 baud):");
     Serial.println("  PLAY:0,1,,5,75   Play Bank 1, Sound 5, Stream 0, Vol 75");
@@ -199,6 +219,29 @@ void loop() {
     // Handle serial commands
     processSerialCommands(Serial);   // USB debug
     processSerialCommands(Serial2);  // ESP32 communication
+    
+    // --- Button Handling ---
+    static unsigned long lastBtnCheck = 0;
+    static bool lastNavState = HIGH;
+    static bool lastFwdState = HIGH;
+    static bool lastRevState = HIGH;
+    
+    if (millis() - lastBtnCheck > 50) {
+        lastBtnCheck = millis();
+        
+        bool navState = digitalRead(PIN_BTN_NAV);
+        bool fwdState = digitalRead(PIN_BTN_FWD);
+        bool revState = digitalRead(PIN_BTN_REV);
+        
+        // Active LOW (Pressed = 0)
+        if (lastNavState == HIGH && navState == LOW) action_togglePlayPause();
+        if (lastFwdState == HIGH && fwdState == LOW) action_playNext();
+        if (lastRevState == HIGH && revState == LOW) action_playPrev();
+        
+        lastNavState = navState;
+        lastFwdState = fwdState;
+        lastRevState = revState;
+    }
     
     // --- Main Audio Task ---
     // Reads from files and fills ring buffers for all active streams
@@ -253,3 +296,8 @@ void loop() {
     if (loopDuration > maxLoopTime) maxLoopTime = loopDuration;
     #endif
 }
+
+// ===================================
+// MP3 Trigger Compatibility Actions
+// ===================================
+// (Moved to serial_commands.cpp)
