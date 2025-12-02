@@ -356,7 +356,16 @@ void mp3DataCallback(MP3FrameInfo &info, int16_t *pcm_buffer, size_t len, void* 
         // Simple push. If buffer full, we drop samples (shouldn't happen if flow control is good)
         // In a real system we might want to block or handle this better, 
         // but for now we rely on fillStreamBuffers checking availableForWrite.
-        rb->push(pcm_buffer[i]);
+        
+        if (channels == 1) {
+            // MONO -> STEREO (Duplicate)
+            // Push twice: Left then Right
+            if (!rb->push(pcm_buffer[i])) break; // Stop if full
+            if (!rb->push(pcm_buffer[i])) break; 
+        } else {
+            // STEREO (Pass through)
+            rb->push(pcm_buffer[i]);
+        }
     }
 }
 

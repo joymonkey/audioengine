@@ -6,6 +6,7 @@
 #include <I2S.h>
 #include "pico/mutex.h"
 #include "MP3DecoderHelix.h"
+#include "serial_queue.h"
 
 using namespace libhelix;
 
