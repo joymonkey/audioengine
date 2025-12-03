@@ -64,6 +64,7 @@ void parseIniFile() {
     mutex_exit(&sd_mutex);
 }
 
+
 // ===================================
 // Scan Bank 1 (Finds dir matching activeBank1Page)
 // ===================================
@@ -165,6 +166,7 @@ void scanBank1() {
         Serial.printf("WARNING: No Bank 1 directory matching '%s...' found on SD card.\n", targetPrefix);
     }
 }
+
 
 // ===================================
 // Sync Bank 1 to Flash
@@ -324,6 +326,7 @@ sync_complete:
     return true;
 }
 
+
 // ===================================
 // Scan SD Banks (2-6 with optional pages)
 // ===================================
@@ -409,6 +412,7 @@ void scanSDBanks() {
     mutex_exit(&sd_mutex);
 }
 
+
 // ===================================
 // Find SD Bank by number and page
 // ===================================
@@ -421,6 +425,7 @@ SDBank* findSDBank(uint8_t bank, char page) {
     return nullptr;
 }
 
+
 // ===================================
 // Get File from SD Bank
 // ===================================
@@ -432,6 +437,7 @@ const char* getSDFile(uint8_t bank, char page, int index) {
     
     return sdBank->files[index - 1];
 }
+
 
 // ===================================
 // Scan Root Tracks (Legacy Compatibility)
@@ -452,24 +458,8 @@ void scanRootTracks() {
         if (!file.isDirectory()) {
             char filename[64];
             file.getName(filename, sizeof(filename));
-            
-            // Check for NNN.MP3 format (where NNN is 001 to 255)
-            // Sparkfun MP3 Trigger supports 001.MP3 to 255.MP3
-            // We will be lenient and accept any MP3/WAV in root, 
-            // OR strictly follow NNN?
-            // User said: "legacy command is sent that the user is trying to play a file in the root"
-            // Sparkfun "T" command maps 1 -> "001.MP3".
-            // So we should probably look for that specific format to be safe?
-            // Or just index EVERYTHING in root?
-            // If we index everything, "Next" works great.
-            // But "Track 1" might be "001.mp3" or "Ambient.mp3" depending on sort.
-            // Sparkfun sorts by filename.
-            // Let's index ALL audio files in root, and sort them later (or assume FAT order).
-            // Actually, for "Track 1" to mean "001.MP3", we really should look for that specific file
-            // when requested by ID. 
-            // BUT, for "Next/Prev", we want to cycle through whatever is there.
-            
-            // Let's just index all valid audio files in root.
+                       
+            // index all valid audio files in SD root
             const char* ext = strrchr(filename, '.');
             if (ext && (strcasecmp(ext, ".wav") == 0 ||
                        strcasecmp(ext, ".mp3") == 0 ||

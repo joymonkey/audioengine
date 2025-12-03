@@ -155,7 +155,11 @@ void fillStreamBuffers() {
         } else if (s->type == STREAM_TYPE_WAV_SD || s->type == STREAM_TYPE_WAV_FLASH) {
             // --- WAV (SD or Flash) ---
             // WAV is simpler, we read small chunks.
-            if (available > 512) {
+            // We need enough space for the expanded data.
+            // Worst case: Mono 22.05kHz -> Stereo 44.1kHz = 4x expansion.
+            // 512 bytes read = 256 samples input -> 1024 samples output.
+            // To be safe and avoid any boundary issues, we check for 2048 samples.
+            if (available > 2048) {
                 uint8_t wavBuf[512];
                 int bytesRead = 0;
                 
@@ -187,16 +191,52 @@ void fillStreamBuffers() {
                 
                 if (bytesRead > 0) {
                     int samples = bytesRead / 2;
-                    for (int k = 0; k < samples; k++) {
-                        int16_t sample = (int16_t)(wavBuf[k*2] | (wavBuf[k*2+1] << 8));
-                        
-                        if (s->channels == 1) {
-                            // MONO -> STEREO (Duplicate)
-                            s->ringBuffer->push(sample); // Left
-                            s->ringBuffer->push(sample); // Right
-                        } else {
-                            // STEREO (Pass through)
-                            s->ringBuffer->push(sample);
+                    
+                    // Handle 22.05kHz upsampling (duplicate samples)
+                    if (s->sampleRate == 22050) {
+                         if (s->channels == 2) {
+                              // STEREO -> UPSAMPLE (Duplicate frame)
+                              // Process in pairs (L+R) and duplicate each frame
+                              // Input: L0, R0, L1, R1...
+                              // Output: L0, R0, L0, R0, L1, R1, L1, R1...
+                              for (int k = 0; k < samples; k += 2) {
+                                  if (k + 1 >= samples) break; // Should not happen if aligned
+                                  
+                                  int16_t left = (int16_t)(wavBuf[k*2] | (wavBuf[k*2+1] << 8));
+                                  int16_t right = (int16_t)(wavBuf[(k+1)*2] | (wavBuf[(k+1)*2+1] << 8));
+                                  
+                                  // Frame 1
+                                  if (!s->ringBuffer->push(left)) break;
+                                  if (!s->ringBuffer->push(right)) break;
+                                  // Frame 2 (Duplicate)
+                                  if (!s->ringBuffer->push(left)) break;
+                                  if (!s->ringBuffer->push(right)) break;
+                              }
+                         } else {
+                             // MONO -> STEREO (Duplicate) -> UPSAMPLE (Duplicate again)
+                             // Total 4 pushes per input sample
+                             for (int k = 0; k < samples; k++) {
+                                 int16_t sample = (int16_t)(wavBuf[k*2] | (wavBuf[k*2+1] << 8));
+                                 if (!s->ringBuffer->push(sample)) break; // L1
+                                 if (!s->ringBuffer->push(sample)) break; // R1
+                                 if (!s->ringBuffer->push(sample)) break; // L2
+                                 if (!s->ringBuffer->push(sample)) break; // R2
+                             }
+                         }
+                         
+                    } else {
+                        // Normal 44.1kHz handling
+                        for (int k = 0; k < samples; k++) {
+                            int16_t sample = (int16_t)(wavBuf[k*2] | (wavBuf[k*2+1] << 8));
+                            
+                            if (s->channels == 1) {
+                                // MONO -> STEREO (Duplicate)
+                                s->ringBuffer->push(sample); // Left
+                                s->ringBuffer->push(sample); // Right
+                            } else {
+                                // STEREO (Pass through)
+                                s->ringBuffer->push(sample);
+                            }
                         }
                     }
                 }
@@ -293,6 +333,7 @@ namespace Mixer {
     }
 } 
 
+
 // ===================================
 // HELPER: Trigger a Chirp
 // ===================================
@@ -328,9 +369,6 @@ void playChirp(int startFreq, int endFreq, int durationMs, uint8_t vol = 128) {
 // ===================================
 // MP3 Decoder Callback
 // ===================================
-// ===================================
-// MP3 Decoder Callback
-// ===================================
 void mp3DataCallback(MP3FrameInfo &info, int16_t *pcm_buffer, size_t len, void* ref) {
     // Use global context since library doesn't pass user data through write() correctly
     int streamIdx = currentDecodingStream;
@@ -345,29 +383,50 @@ void mp3DataCallback(MP3FrameInfo &info, int16_t *pcm_buffer, size_t len, void* 
     static int lastSampleRate = 0;
     if (info.samprate != lastSampleRate && info.samprate != 0) {
         lastSampleRate = info.samprate;
-        // We can't call log_message easily from callback (mutex recursion risk?), 
-        // but we can print to Serial if we are careful or just assume it's ok for debug.
-        // Better to check against expected.
-        if (info.samprate != SAMPLE_RATE) {
-             Serial.printf("Stream %d: MP3 Sample Rate Mismatch! File: %d Hz, System: %d Hz\n", streamIdx, info.samprate, SAMPLE_RATE);
-        }
     }
-    for (size_t i = 0; i < len; i++) {
-        // Simple push. If buffer full, we drop samples (shouldn't happen if flow control is good)
-        // In a real system we might want to block or handle this better, 
-        // but for now we rely on fillStreamBuffers checking availableForWrite.
-        
-        if (channels == 1) {
-            // MONO -> STEREO (Duplicate)
-            // Push twice: Left then Right
-            if (!rb->push(pcm_buffer[i])) break; // Stop if full
-            if (!rb->push(pcm_buffer[i])) break; 
+    // Handle 22.05kHz upsampling vs Normal 44.1kHz
+    if (info.samprate == 22050) {
+        // --- 22.05kHz Handling ---
+        if (channels == 2) {
+             // Stereo: Process in pairs (L, R) and duplicate the frame
+             for (size_t i = 0; i < len; i += 2) {
+                 if (i + 1 >= len) break;
+                 
+                 int16_t left = pcm_buffer[i];
+                 int16_t right = pcm_buffer[i+1];
+                 
+                 // Frame 1
+                 if (!rb->push(left)) break;
+                 if (!rb->push(right)) break;
+                 // Frame 2 (Duplicate)
+                 if (!rb->push(left)) break;
+                 if (!rb->push(right)) break;
+             }
         } else {
-            // STEREO (Pass through)
-            rb->push(pcm_buffer[i]);
+            // Mono: Duplicate sample 4 times (L1, R1, L2, R2)
+             for (size_t i = 0; i < len; i++) {
+                int16_t sample = pcm_buffer[i];
+                if (!rb->push(sample)) break; // L1
+                if (!rb->push(sample)) break; // R1
+                if (!rb->push(sample)) break; // L2
+                if (!rb->push(sample)) break; // R2
+             }
+        }
+    } else {
+        // --- Normal 44.1kHz Handling ---
+        for (size_t i = 0; i < len; i++) {
+            if (channels == 1) {
+                // MONO -> STEREO (Duplicate)
+                if (!rb->push(pcm_buffer[i])) break; // Left
+                if (!rb->push(pcm_buffer[i])) break; // Right
+            } else {
+                // STEREO (Pass through)
+                rb->push(pcm_buffer[i]);
+            }
         }
     }
 }
+
 
 // ===================================
 // SETUP1 (Core 1)
@@ -375,6 +434,7 @@ void mp3DataCallback(MP3FrameInfo &info, int16_t *pcm_buffer, size_t len, void* 
 void setup1() {
     // Core 1 setup
 }
+
 
 // ===================================
 // LOOP1 - Audio Processing (Core 1)
@@ -387,9 +447,7 @@ void loop1() {
     }
 }
 
-// ===================================
-// Start Stream 0 Playback
-// ===================================
+
 // ===================================
 // Start Stream Playback
 // ===================================
@@ -422,7 +480,7 @@ bool startStream(int streamIdx, const char* filename) {
         
         // Check for "data" chunk (basic check)
         // If not "data", we might need to skip chunks.
-        // For now, let's implement a simple search for "data"
+        // For now, do a simple search for "data"
         if (strncmp(header.data, "data", 4) != 0) {
             // Header is likely larger or has extra chunks.
             // Reset to 12 (after RIFF/WAVE) and search
@@ -446,6 +504,7 @@ bool startStream(int streamIdx, const char* filename) {
         }
         
         s->channels = header.numChannels;
+        s->sampleRate = header.sampleRate;
         if (s->channels < 1 || s->channels > 2) s->channels = 2; 
         
         s->type = STREAM_TYPE_WAV_FLASH;
@@ -481,8 +540,10 @@ bool startStream(int streamIdx, const char* filename) {
             }
             
             s->decoderIndex = decoderIdx;
+            s->decoderIndex = decoderIdx;
             s->type = STREAM_TYPE_MP3_SD;
             s->channels = 2; 
+            s->sampleRate = 0; // Unknown until first frame decoded 
             
             // Initialize Decoder
             if (mp3Decoders[decoderIdx]) {
@@ -513,6 +574,7 @@ bool startStream(int streamIdx, const char* filename) {
             }
             
             s->channels = header.numChannels;
+            s->sampleRate = header.sampleRate;
             if (s->channels < 1 || s->channels > 2) s->channels = 2;
             
             s->type = STREAM_TYPE_WAV_SD;
@@ -528,8 +590,42 @@ bool startStream(int streamIdx, const char* filename) {
     s->startTime = millis(); // Log start time
     
     log_message(String("Stream ") + streamIdx + ": Playing " + filename + " (Start: " + s->startTime + "ms)");
+    
+    if (isMP3) {
+        log_message(String("  Format: MP3, Rate: ") + (s->sampleRate > 0 ? String(s->sampleRate) : "Unknown") + "Hz, Ch: " + s->channels);
+    } else {
+        // Read details for WAV debugging
+        uint16_t bits = 0;
+        uint16_t align = 0;
+        if (s->type == STREAM_TYPE_WAV_SD) {
+             mutex_enter_blocking(&sd_mutex);
+             if (s->sdFile) {
+                 s->sdFile.seek(34); // bitsPerSample
+                 s->sdFile.read(&bits, 2);
+                 s->sdFile.seek(32); // blockAlign
+                 s->sdFile.read(&align, 2);
+                 s->sdFile.seek(44);
+                 uint32_t pos = s->sdFile.position();
+                 s->sdFile.seek(34); s->sdFile.read(&bits, 2);
+                 s->sdFile.seek(32); s->sdFile.read(&align, 2);
+                 s->sdFile.seek(pos);
+             }
+             mutex_exit(&sd_mutex);
+        } else if (s->type == STREAM_TYPE_WAV_FLASH) {
+             mutex_enter_blocking(&flash_mutex);
+             if (s->flashFile) {
+                 uint32_t pos = s->flashFile.position();
+                 s->flashFile.seek(34); s->flashFile.read((uint8_t*)&bits, 2);
+                 s->flashFile.seek(32); s->flashFile.read((uint8_t*)&align, 2);
+                 s->flashFile.seek(pos);
+             }
+             mutex_exit(&flash_mutex);
+        }
+        log_message(String("  Format: WAV, Rate: ") + s->sampleRate + "Hz, Ch: " + s->channels + ", Bits: " + bits + ", Align: " + align);
+    }
     return true;
 }
+
 
 // ===================================
 // Stop Stream Playback

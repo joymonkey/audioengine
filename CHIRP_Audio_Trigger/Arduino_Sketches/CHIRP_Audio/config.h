@@ -6,14 +6,13 @@
 #include <I2S.h>
 #include "pico/mutex.h"
 #include "MP3DecoderHelix.h"
-#include "serial_queue.h"
 
 using namespace libhelix;
 
 // ===================================
 // Constants
 // ===================================
-#define VERSION_STRING "20251128"
+#define VERSION_STRING "20251202"
 //#define DEBUG // Comment out to disable debug logging
 
 // Hardware Configuration
@@ -30,6 +29,11 @@ using namespace libhelix;
 #define UART_TX 4
 #define UART_RX 5
 
+// Button Configuration
+#define PIN_BTN_NAV 16 // Start/Stop
+#define PIN_BTN_FWD 17 // Next
+#define PIN_BTN_REV 18 // Prev
+
 // Development Mode
 #define DEV_MODE true
 #define DEV_SYNC_LIMIT 100
@@ -44,6 +48,10 @@ using namespace libhelix;
 #define MAX_SOUNDS 100
 #define MAX_SD_BANKS 20
 #define MAX_FILES_PER_BANK 100
+
+// Outgoing Serial Message Queue
+#define SERIAL2_QUEUE_SIZE 16
+#define SERIAL2_MSG_MAX_LENGTH 128
 
 // ===================================
 // Struct Definitions
@@ -77,6 +85,19 @@ struct SDBank {
     char dirName[32];
     char files[MAX_FILES_PER_BANK][64];
     int fileCount;
+};
+
+struct SerialMessage {
+    char buffer[SERIAL2_MSG_MAX_LENGTH];
+    uint8_t length;
+};
+
+struct SerialQueue {
+    SerialMessage messages[SERIAL2_QUEUE_SIZE];
+    volatile int readPos;
+    volatile int writePos;
+    uint32_t messagesSent;
+    uint32_t messagesDropped;
 };
 
 // ===================================
@@ -121,6 +142,9 @@ extern MP3DecoderHelix* mp3Decoder; // "Option 2" PSRAM fix
 
 // Filename Checksum
 extern uint32_t globalFilenameChecksum;
+
+// Outgoing Serial Message Queue
+extern SerialQueue serial2Queue;
 
 // ===================================
 // NEW: Flexible Audio Architecture
@@ -209,6 +233,7 @@ struct AudioStream {
     bool stopRequested;
     bool fileFinished;
     uint8_t channels; // 1 = Mono, 2 = Stereo
+    uint32_t sampleRate; // Source sample rate (e.g. 44100 or 22050)
     uint32_t startTime; // Debug timestamp
 };
 
@@ -235,7 +260,6 @@ SDBank* findSDBank(uint8_t bank, char page);
 const char* getSDFile(uint8_t bank, char page, int index);
 
 // from audio_playback.cpp
-// from audio_playback.cpp
 void mp3DataCallback(MP3FrameInfo &info, int16_t *pcm_buffer, size_t len, void* ref);
 bool startStream(int streamIdx, const char* filename);
 void stopStream(int streamIdx);
@@ -251,5 +275,12 @@ void action_playPrev();
 void action_playTrackById(int trackNum);
 void action_playTrackByIndex(int trackIndex);
 void action_setSparkfunVolume(uint8_t sfVol);
+
+// from serial_queue.cpp
+void initSerial2Queue();
+bool queueSerial2Message(const char* msg);
+void trySendQueuedMessages(int maxMessages);
+bool isCpuBusy();
+int getQueuedMessageCount();
 
 #endif // CONFIG_H

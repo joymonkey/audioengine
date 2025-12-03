@@ -1,6 +1,5 @@
 /*
  * CHIRP Audio Trigger
- * Version: 20251128
  * 
  * Description:
  * Multi-stream audio playback engine for RP2350.
@@ -81,24 +80,10 @@
 #include "config.h"
 #include <CRC32.h> // For checksum
 
-
-// ===================================
-// Button Configuration
-// ===================================
-#define PIN_BTN_NAV 16 // Start/Stop
-#define PIN_BTN_FWD 17 // Next
-#define PIN_BTN_REV 18 // Prev
-
-// ===================================
-// Global Variable Definitions
-// (ALL MOVED to serial_commands.cpp / audio_playback.cpp)
-// ===================================
-
-
 // ===================================
 // NEW FUNCTION: Calculate Checksum
 // ===================================
-void calculateGlobalChecksum() {
+/*void calculateGlobalChecksum() {
     Serial.print("Calculating filename checksum... ");
     CRC32 crc;
 
@@ -118,36 +103,35 @@ void calculateGlobalChecksum() {
 
     globalFilenameChecksum = crc.finalize();
     Serial.println(globalFilenameChecksum);
-}
+}*/
 
 // ===================================
 // SETUP (Core 0)
 // ===================================
 void setup() {
+    // LED
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW);
+    delay(1750);
+
     // Initialize SPI1 FIRST
     SPI1.setRX(SD_MISO);
     SPI1.setTX(SD_MOSI);
     SPI1.setSCK(SD_SCK);
     
-    // Serial
-    Serial.begin(115200);   // USB serial
-    // (Serial2 "UART" fix)
+    // USB Serial (mainly used for development)
+    Serial.begin(115200);
+    // Serial2 receives commands and sends acknowledgements
     Serial2.setTX(UART_TX);
     Serial2.setRX(UART_RX);
     Serial2.begin(9600);
-    delay(200);
+    
     
     Serial.println("\n╔═══════════════════════════════════════╗");
-    Serial.printf(  "║  CHIRP Audio Engine v%s          ║\n", VERSION_STRING);
+    Serial.printf(  "║  CHIRP Audio Trigger v%s        ║\n", VERSION_STRING);
     Serial.println("╚═══════════════════════════════════════╝");
     Serial.println();
-    Serial.println("Stream 0: Bank 1 WAV from Flash (overlay)");
-    Serial.println("Stream 1: Banks 2-6 MP3 from SD (primary)");
     Serial.printf("PSRAM: %d KB free\n\n", rp2040.getFreePSRAMHeap() / 1024);
-
-    // LED
-    pinMode(LED_PIN, OUTPUT);
-    digitalWrite(LED_PIN, LOW);
     
     // Buttons
     pinMode(PIN_BTN_NAV, INPUT_PULLUP);
@@ -158,8 +142,9 @@ void setup() {
     initAudioSystem();
     Serial.println("Audio System Initialized (3 Streams, 2 MP3 Decoders)");
     
-    // Initialize Compat Layer (Moved to serial_commands.cpp, no setup needed)
-    // setupMp3TrigCompat(); 
+    // Initialize Serial2 Message Queue
+    initSerial2Queue();
+    Serial.println("Serial2 Message Queue Initialized");
 
     // Allocate MP3 decoders in PSRAM
     Serial.print("Allocating MP3 decoders in PSRAM... ");
@@ -252,7 +237,23 @@ void setup() {
     }
     
     // Calculate checksum *after* all banks are scanned
-    calculateGlobalChecksum();
+    //calculateGlobalChecksum();
+    Serial.print("Calculating filename checksum... ");
+    CRC32 crc;
+    // 1. Checksum Bank 1 (Flash) variant filenames
+    for (int i = 0; i < bank1SoundCount; i++) {
+        for (int v = 0; v < bank1Sounds[i].variantCount; v++) {
+            crc.update(bank1Sounds[i].variants[v], strlen(bank1Sounds[i].variants[v]));
+        }
+    }
+    // 2. Checksum Banks 2-6 (SD) filenames
+    for (int i = 0; i < sdBankCount; i++) {
+        for (int f = 0; f < sdBanks[i].fileCount; f++) {
+            crc.update(sdBanks[i].files[f], strlen(sdBanks[i].files[f]));
+        }
+    }
+    globalFilenameChecksum = crc.finalize();
+    Serial.println(globalFilenameChecksum);
     
     // Scan Root Tracks for Legacy Compatibility
     Serial.println("\n=== Scanning Root Tracks (Legacy) ===");
@@ -266,6 +267,7 @@ void setup() {
     Serial.println("  STOP:* Stop all streams");
     Serial.println("  VOLU:1,50        Set stream 1 volume to 50");
     Serial.println("  LIST             List all banks");
+    Serial.println("  CHRP:500,100,500,50"); //CHRP:StartHz,EndHz,DurationMs,Volume
 
     Serial.println();
     
@@ -284,6 +286,10 @@ void loop() {
     // Handle serial commands
     processSerialCommands(Serial);   // USB debug
     processSerialCommands(Serial2);  // ESP32 communication
+    
+    // Try to send queued Serial2 messages (up to 5 per loop iteration)
+    // Only sends when CPU is not busy with MP3 decoding
+    trySendQueuedMessages(5);
     
     // --- Button Handling ---
     static unsigned long lastBtnCheck = 0;
@@ -361,8 +367,3 @@ void loop() {
     if (loopDuration > maxLoopTime) maxLoopTime = loopDuration;
     #endif
 }
-
-// ===================================
-// MP3 Trigger Compatibility Actions
-// ===================================
-// (Moved to serial_commands.cpp)
