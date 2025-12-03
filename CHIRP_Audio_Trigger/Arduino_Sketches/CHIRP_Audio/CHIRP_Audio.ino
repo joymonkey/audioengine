@@ -59,7 +59,7 @@
  * CHIRP Serial Commands:
  * PLAY : play a sound
  * STOP : stop a stream or all streams
- * VOLU : set volume from 0 (silent) to 99 (max)
+ * VOL  : set volume from 0 (silent) to 99 (max)
  * CHRP : play a basic sound chirp
  * GMAN : Get Manifest of sound banks
  * LIST : Get a list of Sound Banks and Pages
@@ -265,7 +265,7 @@ void setup() {
     Serial.println("  PLAY:2,B,1,80  Play Bank 2, Page B, Sound 1, Vol 80");
     Serial.println("  STOP:0           Stop stream 0");
     Serial.println("  STOP:* Stop all streams");
-    Serial.println("  VOLU:1,50        Set stream 1 volume to 50");
+    Serial.println("  VOL:1,50         Set stream 1 volume to 50");
     Serial.println("  LIST             List all banks");
     Serial.println("  CHRP:500,100,500,50"); //CHRP:StartHz,EndHz,DurationMs,Volume
 

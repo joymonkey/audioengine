@@ -3,19 +3,15 @@
 
 // ===================================
 // Global Variable Definitions
-// (Moved from .ino file to fix linker errors)
 // ===================================
 
 // File Systems
 SdFat sd;
 I2S i2s(OUTPUT, I2S_BCLK, I2S_DATA, I2S_LRCK);
 
-// --- OPTIMIZATION: Use pre-computed multipliers ---
 // Audio Configuration
 // We pre-calculate (attenuation_0_100 * 256 / 100) -> 0-256
 volatile int16_t masterAttenMultiplier = (97 * 256) / 100; // Default 97%
-
-// --- Legacy Stream Globals Removed (Replaced by AudioStream streams[]) ---
 
 // Bank 1 File List (Flash)
 SoundFile bank1Sounds[MAX_SOUNDS];
@@ -34,9 +30,6 @@ int rootTrackCount = 0;
 // Test Tone State
 volatile bool testToneActive = false;
 volatile uint32_t testTonePhase = 0;
-// (TEST_TONE_FREQ and PHASE_INCREMENT are now #defined in config.h)
-
-// --- Legacy MP3 Decoder Removed (Replaced by mp3Decoders[]) ---
 
 // Filename Checksum
 uint32_t globalFilenameChecksum = 0;
@@ -48,7 +41,6 @@ uint32_t globalFilenameChecksum = 0;
 __attribute__((section(".mutex_array"))) mutex_t sd_mutex;
 __attribute__((section(".mutex_array"))) mutex_t flash_mutex;
 __attribute__((section(".mutex_array"))) mutex_t log_mutex;
-// --- LOCK-FREE: wav_buffer_mutex removed ---
 
 // ===================================
 // Logging Helper
@@ -334,13 +326,18 @@ void processSerialCommands(Stream &serial) {
                     
                     index = atoi(ptr);
                     ptr = strchr(ptr, ',');
-                    if (!ptr) goto play_error;
-                    ptr++;
-                    
-                    volume = atoi(ptr);
-                    
-                    if (volume < 0) volume = 0;
-                    if (volume > 99) volume = 99;
+                    if (!ptr) {
+                        // No volume parameter - use current stream volume
+                        volume = -1;  // Use -1 as a flag to keep existing volume
+                    } else {
+                        ptr++;
+                        if (*ptr == '\0' || *ptr == '\r' || *ptr == '\n') {
+                            // Empty volume parameter - use current stream volume
+                            volume = -1;  // Use -1 as a flag to keep existing volume
+                        } else {
+                            volume = atoi(ptr);
+                        }
+                    }
                     
                     if (stream < 0 || stream >= MAX_STREAMS) {
                         serial.println("ERR:PARAM - Invalid stream");
@@ -375,7 +372,10 @@ void processSerialCommands(Stream &serial) {
                             sendSerialResponseF(serial, "S:%d,ply,%d", stream, volume);
 
                             if (startStream(stream, fullPath)) {
-                                streams[stream].volume = (float)volume / 99.0f;
+                                if (volume >= 0) {
+                                    if (volume > 99) volume = 99;
+                                    streams[stream].volume = (float)volume / 99.0f;
+                                }
                             } else {
                                 serial.println("ERR:NOFILE");
                             }
@@ -396,7 +396,10 @@ void processSerialCommands(Stream &serial) {
                             sendSerialResponseF(serial, "S:%d,ply,%d", stream, volume);
 
                             if (startStream(stream, fullPath)) {
-                                streams[stream].volume = (float)volume / 99.0f;
+                                if (volume >= 0) {
+                                    if (volume > 99) volume = 99;
+                                    streams[stream].volume = (float)volume / 99.0f;
+                                }
                             } else {
                                 serial.println("ERR:NOFILE");
                             }
@@ -416,17 +419,17 @@ void processSerialCommands(Stream &serial) {
                     }
                 }
                 
-                // STOP Command
-                else if (strncmp(cmdBuffer, "STOP:", 5) == 0) {
-                    char target = cmdBuffer[5];
-                    if (target == '*') {
+                // STOP Command  
+                else if (strcmp(cmdBuffer, "STOP") == 0 || strncmp(cmdBuffer, "STOP:", 5) == 0) {
+                    if (strcmp(cmdBuffer, "STOP") == 0 || cmdBuffer[5] == '*') {
+                        // Stop all streams if just "STOP" or "STOP:*"
                         for (int i = 0; i < MAX_STREAMS; i++) {
                             stopStream(i);
                             sendSerialResponse(serial, "PACK:STOP");
                             sendSerialResponseF(serial, "S:%d,idle,,0", i);
                         }
                     } else {
-                        int stream = target - '0';
+                        int stream = cmdBuffer[5] - '0';
                         if (stream >= 0 && stream < MAX_STREAMS) {
                             stopStream(stream);
                             sendSerialResponse(serial, "PACK:STOP");
@@ -473,12 +476,12 @@ void processSerialCommands(Stream &serial) {
                 }
                 
                 // VOLU Command
-                else if (strncmp(cmdBuffer, "VOLU:", 5) == 0) {
-                    char* comma = strchr(cmdBuffer + 5, ',');
+                else if (strncmp(cmdBuffer, "VOL:", 4) == 0) {
+                    char* comma = strchr(cmdBuffer + 4, ',');
                     
                     if (comma) {
                         // Comma exists: Set specific stream volume
-                        int stream = atoi(cmdBuffer + 5);
+                        int stream = atoi(cmdBuffer + 4);
                         int volume = atoi(comma + 1);
                         if (volume < 0) volume = 0;
                         if (volume > 99) volume = 99;
@@ -491,7 +494,7 @@ void processSerialCommands(Stream &serial) {
                         }
                     } else {
                         // No comma: Set ALL stream volumes
-                        int volume = atoi(cmdBuffer + 5);
+                        int volume = atoi(cmdBuffer + 4);
                         if (volume < 0) volume = 0;
                         if (volume > 99) volume = 99;
 

@@ -384,6 +384,9 @@ void mp3DataCallback(MP3FrameInfo &info, int16_t *pcm_buffer, size_t len, void* 
     if (info.samprate != lastSampleRate && info.samprate != 0) {
         lastSampleRate = info.samprate;
     }
+    if (streams[streamIdx].sampleRate == 0 && info.samprate != 0) {
+        streams[streamIdx].sampleRate = info.samprate;
+    }
     // Handle 22.05kHz upsampling vs Normal 44.1kHz
     if (info.samprate == 22050) {
         // --- 22.05kHz Handling ---
