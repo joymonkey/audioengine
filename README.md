@@ -3,6 +3,8 @@ Hardware and firmware for a droid control system, evolved from the little used [
 
 # CHIRP Audio Trigger
 This is an advanced MP3 and WAV file decoder/mixer/player, heavily inspired by the [Sparkfun/Robertsonics MP3 Trigger](https://www.sparkfun.com/mp3-trigger.html) that has been used across droid control systems since the [original Padawan PS2 days](https://astromech.net/forums/showthread.php?8354-Using-a-Wireless-PS2-controller-with-ardurino). This project covers DIY breadboard hardware, a custom PCB and the Arduino code that does the audio magic.
+![chirp-board-proto](https://github.com/user-attachments/assets/db2b1b3f-c6e0-4041-a972-08b1c2d54b92)
+
 
 # CHIRP Droid Control
 An evolution of the previosly mentioned ShadyRC system. The intent is to use a microcontroller and ExpressLRS radio receiver to send signals/commands to the various motion, sound and lighting systems of an Astromech droid. Some goals...
