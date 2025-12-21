@@ -12,11 +12,11 @@ using namespace libhelix;
 // ===================================
 // Constants
 // ===================================
-#define VERSION_STRING "20251202"
+#define VERSION_STRING "20251221"
 //#define DEBUG // Comment out to disable debug logging
 
 // Hardware Configuration
-#define LED_PIN 25
+#define LED_PIN 25 //LED pin of the Pimoroni Pico Plus 2
 #define SD_CS   13
 #define SD_MISO 12
 #define SD_MOSI 15
@@ -24,14 +24,15 @@ using namespace libhelix;
 #define I2S_BCLK 9
 #define I2S_LRCK 10
 #define I2S_DATA 11
+#define NEOPIXEL_PIN 19 //CHIRP Audio Trigger PCB has 3 neopixels on pin 19
 
 // UART Pins (Serial2)
 #define UART_TX 4
 #define UART_RX 5
 
 // Button Configuration
-#define PIN_BTN_NAV 16 // Start/Stop
-#define PIN_BTN_FWD 17 // Next
+#define PIN_BTN_NAV 17 // Start/Stop
+#define PIN_BTN_FWD 16 // Next
 #define PIN_BTN_REV 18 // Prev
 
 // Development Mode
@@ -146,12 +147,13 @@ extern uint32_t globalFilenameChecksum;
 // Outgoing Serial Message Queue
 extern SerialQueue serial2Queue;
 
+// Control I2S Hardware State from Core 0
+extern volatile bool g_allowAudio;
+
 // ===================================
 // NEW: Flexible Audio Architecture
 // ===================================
 
-#define MAX_STREAMS 3
-#define MAX_MP3_DECODERS 2
 #define MAX_STREAMS 3
 #define MAX_MP3_DECODERS 2
 #define STREAM_BUFFER_SIZE (256 * 1024) // 256K samples = 512KB per stream (PSRAM)
@@ -275,6 +277,7 @@ void action_playPrev();
 void action_playTrackById(int trackNum);
 void action_playTrackByIndex(int trackIndex);
 void action_setSparkfunVolume(uint8_t sfVol);
+bool checkAndHandleMp3Command(Stream &s, uint8_t firstByte);
 
 // from serial_queue.cpp
 void initSerial2Queue();
@@ -282,5 +285,12 @@ bool queueSerial2Message(const char* msg);
 void trySendQueuedMessages(int maxMessages);
 bool isCpuBusy();
 int getQueuedMessageCount();
+
+// from blinkies.cpp
+void initBlinkies();
+void playStartupSequence();
+void updateSyncLEDs(bool fileTransferEvent = false);
+void updateRuntimeLEDs();
+
 
 #endif // CONFIG_H

@@ -1,56 +1,5 @@
 #include "config.h"
 
-
-// ===================================
-// Global Variable Definitions
-// ===================================
-
-// File Systems
-SdFat sd;
-I2S i2s(OUTPUT, I2S_BCLK, I2S_DATA, I2S_LRCK);
-
-// Audio Configuration
-// We pre-calculate (attenuation_0_100 * 256 / 100) -> 0-256
-volatile int16_t masterAttenMultiplier = (97 * 256) / 100; // Default 97%
-
-// Bank 1 File List (Flash)
-SoundFile bank1Sounds[MAX_SOUNDS];
-int bank1SoundCount = 0;
-char bank1DirName[64] = "";
-char activeBank1Page = 'A'; 
-
-// SD Banks Structure (Banks 2-6)
-SDBank sdBanks[MAX_SD_BANKS];
-int sdBankCount = 0;
-
-// Root Tracks (Legacy Compatibility)
-char rootTracks[MAX_ROOT_TRACKS][16];
-int rootTrackCount = 0;
-
-// Test Tone State
-volatile bool testToneActive = false;
-volatile uint32_t testTonePhase = 0;
-
-// Filename Checksum
-uint32_t globalFilenameChecksum = 0;
-
-
-// ===================================
-// Global Mutex Definitions
-// ===================================
-__attribute__((section(".mutex_array"))) mutex_t sd_mutex;
-__attribute__((section(".mutex_array"))) mutex_t flash_mutex;
-__attribute__((section(".mutex_array"))) mutex_t log_mutex;
-
-// ===================================
-// Logging Helper
-// ===================================
-void log_message(const String& msg) {
-    mutex_enter_blocking(&log_mutex);
-    Serial.println(msg);
-    mutex_exit(&log_mutex);
-}
-
 // ===================================
 // Serial Output Helper
 // ===================================
@@ -72,180 +21,6 @@ void sendSerialResponseF(Stream &serial, const char* format, ...) {
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
     sendSerialResponse(serial, buffer);
-}
-
-// ===================================
-// MP3 Trigger Compatibility Actions
-// ===================================
-
-// State Tracking
-int lastPlayedRootIndex = 0; // 0-based index in rootTracks array
-
-// Helper to play a root track by index
-void playRootTrack(int index) {
-    if (rootTrackCount == 0) return;
-    
-    // Wrap or Clamp? 
-    // Sparkfun "Next" wraps.
-    if (index < 0) index = rootTrackCount - 1;
-    if (index >= rootTrackCount) index = 0;
-    
-    const char* filename = rootTracks[index];
-    
-    // Construct path
-    char fullPath[128];
-    snprintf(fullPath, sizeof(fullPath), "/%s", filename);
-    
-    // Stop Stream 1 (SD Stream) and Play
-    stopStream(1);
-    if (startStream(1, fullPath)) {
-        lastPlayedRootIndex = index;
-        Serial.printf("COMPAT: Playing Root Track %d/%d (%s)\n", index + 1, rootTrackCount, filename);
-    }
-}
-
-void action_togglePlayPause() {
-    if (streams[1].active) {
-        stopStream(1);
-        Serial.println("COMPAT: Stop");
-    } else {
-        // Play last played root track
-        playRootTrack(lastPlayedRootIndex);
-    }
-}
-
-void action_playNext() {
-    playRootTrack(lastPlayedRootIndex + 1);
-}
-
-void action_playPrev() {
-    playRootTrack(lastPlayedRootIndex - 1);
-}
-
-void action_playTrackById(int trackNum) {
-    // trackNum is 1-based (e.g. 1 -> "001.MP3")
-    // We need to find the file that starts with "001" or "1" or matches "001.mp3"
-    // Sparkfun is strict about "NNN.MP3" usually.
-    // But since we indexed ALL files, we can search our index.
-    
-    char prefix[8];
-    snprintf(prefix, sizeof(prefix), "%03d", trackNum); // "001"
-    
-    // Search for file starting with "001"
-    for (int i = 0; i < rootTrackCount; i++) {
-        if (strncmp(rootTracks[i], prefix, 3) == 0) {
-            playRootTrack(i);
-            return;
-        }
-    }
-    
-    // Fallback: Try strict number match if filename is just "1.mp3"
-    snprintf(prefix, sizeof(prefix), "%d.", trackNum); // "1."
-    for (int i = 0; i < rootTrackCount; i++) {
-        if (strncmp(rootTracks[i], prefix, strlen(prefix)) == 0) {
-            playRootTrack(i);
-            return;
-        }
-    }
-    
-    Serial.printf("COMPAT: Track ID %d not found in root.\n", trackNum);
-}
-
-void action_playTrackByIndex(int trackIndex) {
-    // trackIndex is raw 1-based index from 'p' command
-    // Just play the file at that index in our sorted list
-    if (trackIndex >= 1 && trackIndex <= rootTrackCount) {
-        playRootTrack(trackIndex - 1);
-    }
-}
-
-void action_setSparkfunVolume(uint8_t sfVol) {
-    // 0 = Loud, 255 = Silent
-    float vol = 1.0f - ((float)sfVol / 255.0f);
-    if (vol < 0.0f) vol = 0.0f;
-    if (vol > 1.0f) vol = 1.0f;
-    
-    // Apply to ALL streams for global volume control effect
-    for (int i = 0; i < MAX_STREAMS; i++) {
-        streams[i].volume = vol;
-    }
-    Serial.printf("COMPAT: Volume set to %.2f\n", vol);
-}
-
-// ===================================
-// MP3 Trigger Compatibility Parser
-// ===================================
-
-// Helper to wait for the second byte of a 2-byte command
-// Returns true if byte received, false if timed out.
-bool waitForByte(Stream &s, uint8_t &data, unsigned long timeout = 10) {
-    unsigned long start = millis();
-    while (s.available() == 0) {
-        if (millis() - start > timeout) return false;
-    }
-    data = s.read();
-    return true;
-}
-
-bool checkAndHandleMp3Command(Stream &s, uint8_t firstByte) {
-    uint8_t arg = 0;
-
-    switch (firstByte) {
-        // ----------------------------------------------------------
-        // 1-Byte Navigation Commands
-        // ----------------------------------------------------------
-        case 'O': // Navigation Center (Start/Stop)
-            action_togglePlayPause();
-            return true;
-
-        case 'F': // Navigation Forward (Next)
-            action_playNext();
-            return true;
-
-        case 'R': // Navigation Reverse (Prev)
-            action_playPrev();
-            return true;
-
-        // ----------------------------------------------------------
-        // 2-Byte Trigger/Control Commands
-        // ----------------------------------------------------------
-        
-        case 'T': // Trigger (ASCII): 'T' + '1'-'9'
-            if (waitForByte(s, arg)) {
-                if (arg >= '0' && arg <= '9') {
-                    action_playTrackById(arg - '0'); 
-                    return true;
-                }
-            }
-            return false;
-
-        case 't': // Trigger (Binary): 't' + 0-255
-            if (waitForByte(s, arg)) {
-                action_playTrackById((int)arg);
-                return true;
-            }
-            break;
-
-        case 'v': // Set Volume (Binary): 'v' + 0-255
-            if (waitForByte(s, arg)) {
-                action_setSparkfunVolume(arg);
-                return true;
-            }
-            break;
-
-        case 'p': // Play (Binary): 'p' + 0-255 (Play by Index)
-            if (waitForByte(s, arg)) {
-                action_playTrackByIndex((int)arg);
-                return true;
-            }
-            break;
-
-        default:
-            // Not a compat command, let main parser handle it
-            return false;
-    }
-    
-    return false;
 }
 
 // Helper to find the next available stream
@@ -297,6 +72,11 @@ void processSerialCommands(Stream &serial) {
             if (cmdPos > 0) {
                 cmdBuffer[cmdPos] = '\0';
                 
+                // Debug Logging: Echo commands from Serial2 (UART) to Serial (USB)
+                if (&serial == &Serial2) {
+                    Serial.printf("RX [UART]: %s\n", cmdBuffer);
+                }
+
                 // PLAY Command
                 if (strncmp(cmdBuffer, "PLAY:", 5) == 0) {
                     int stream, bank, volume, index;
@@ -304,38 +84,55 @@ void processSerialCommands(Stream &serial) {
                     
                     char* ptr = cmdBuffer + 5;
                     
-                    // NEW FORMAT: PLAY:bank,page,index,volume
+                    // NEW FORMAT: PLAY:index,bank,page,volume
+                    // Defaults
+                    bank = 1;
+                    page = 'A';
+                    volume = -1; // Use current volume
+                    
                     // Auto-select stream
                     stream = getNextAvailableStream();
                     
-                    bank = atoi(ptr);
-                    ptr = strchr(ptr, ',');
-                    if (!ptr) goto play_error;
-                    ptr++;
-                    
-                    if (*ptr == ',') {
-                        page = 0; 
-                    } else if (*ptr >= 'A' && *ptr <= 'Z') {
-                        page = *ptr;
-                        ptr++;
-                        if (*ptr != ',') goto play_error;
-                    } else {
-                        goto play_error;
-                    }
-                    ptr++;
-                    
+                    // 1. Index (Required)
+                    if (*ptr == '\0' || *ptr == '\r' || *ptr == '\n') goto play_error;
                     index = atoi(ptr);
+                    
+                    // Check for next parameter
                     ptr = strchr(ptr, ',');
-                    if (!ptr) {
-                        // No volume parameter - use current stream volume
-                        volume = -1;  // Use -1 as a flag to keep existing volume
-                    } else {
-                        ptr++;
-                        if (*ptr == '\0' || *ptr == '\r' || *ptr == '\n') {
-                            // Empty volume parameter - use current stream volume
-                            volume = -1;  // Use -1 as a flag to keep existing volume
-                        } else {
-                            volume = atoi(ptr);
+                    if (ptr) {
+                        ptr++; // Skip comma
+                        
+                        // 2. Bank (Optional)
+                        if (*ptr != ',' && *ptr != '\0' && *ptr != '\r' && *ptr != '\n') {
+                            bank = atoi(ptr);
+                        }
+                        
+                        // Check for next parameter
+                        ptr = strchr(ptr, ',');
+                        if (ptr) {
+                            ptr++; // Skip comma
+                            
+                            // 3. Page (Optional)
+                            if (*ptr != ',' && *ptr != '\0' && *ptr != '\r' && *ptr != '\n') {
+                                if (*ptr >= 'A' && *ptr <= 'Z') {
+                                    page = *ptr;
+                                } else if (*ptr >= 'a' && *ptr <= 'z') {
+                                    page = *ptr - 32; // Uppercase
+                                } else if (*ptr == '0') {
+                                    page = 0; // Explicitly 0 for non-paged banks
+                                }
+                            }
+                            
+                            // Check for next parameter
+                            ptr = strchr(ptr, ',');
+                            if (ptr) {
+                                ptr++; // Skip comma
+                                
+                                // 4. Volume (Optional)
+                                if (*ptr != '\0' && *ptr != '\r' && *ptr != '\n') {
+                                    volume = atoi(ptr);
+                                }
+                            }
                         }
                     }
                     
@@ -415,7 +212,7 @@ void processSerialCommands(Stream &serial) {
                     
                     if (false) {
                     play_error:
-                        serial.println("ERR:PARAM - Format: PLAY:bank,page,index,volume");
+                        serial.println("ERR:PARAM - Format: PLAY:index,bank,page,volume");
                     }
                 }
                 
@@ -534,12 +331,16 @@ void processSerialCommands(Stream &serial) {
                 // GMAN Command (with MSUM)
                 else if (strcmp(cmdBuffer, "GMAN") == 0) {
                     sendSerialResponseF(serial, "MDAT:%d", sdBankCount + 1);
-                    sendSerialResponseF(serial, "BANK:1,,%d", bank1SoundCount);
+                    // Send full directory name for Bank 1 (e.g. "1A_R2D2")
+                    sendSerialResponseF(serial, "BANK:1,%s,%d", 
+                                  bank1DirName, 
+                                  bank1SoundCount);
 
                     for (int i = 0; i < sdBankCount; i++) {
-                        sendSerialResponseF(serial, "BANK:%d,%c,%d",
+                        // Send full directory name (e.g. "1A_R2D2") instead of just page char
+                        sendSerialResponseF(serial, "BANK:%d,%s,%d",
                                      sdBanks[i].bankNum,
-                                     sdBanks[i].page ? sdBanks[i].page : ',',
+                                     sdBanks[i].dirName,
                                      sdBanks[i].fileCount);
                     }
                     
@@ -603,6 +404,31 @@ void processSerialCommands(Stream &serial) {
                     }
                 }
                 
+                // CCRC Command: Clear Flash (Force Re-sync)
+                else if (strcmp(cmdBuffer, "CCRC") == 0) {
+                    serial.println("CMD: CCRC - Clearing Flash...");
+                    
+                    // Stop any active playback to avoid file access conflicts
+                    for (int i = 0; i < MAX_STREAMS; i++) {
+                        stopStream(i);
+                    }
+                    
+                    int count = 0;
+                    Dir dir = LittleFS.openDir("/flash");
+                    while (dir.next()) {
+                        if (!dir.isDirectory()) {
+                            String fullPath = "/flash/" + dir.fileName();
+                            if (LittleFS.remove(fullPath)) {
+                                count++;
+                            }
+                        }
+                    }
+                    
+                    serial.printf("Deleted %d files from /flash.\n", count);
+                    serial.println("Please REBOOT the board to re-sync files.");
+                    sendSerialResponse(serial, "PACK:CCRC");
+                }
+
                 // STAT Command
                 else if (strncmp(cmdBuffer, "STAT:", 5) == 0) {
                     int stream = atoi(cmdBuffer + 5);
@@ -625,6 +451,9 @@ void processSerialCommands(Stream &serial) {
                 }
                 
                 cmdPos = 0; 
+            } else {
+                 // Clean up empty lines (cmdPos == 0) silently
+                 // This handles the flush command from Configurator/Core
             }
         }
         else if (cmdPos < (sizeof(usbCmdBuffer) - 1)) {

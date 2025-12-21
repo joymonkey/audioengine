@@ -79,6 +79,9 @@
 
 #include "config.h"
 #include <CRC32.h> // For checksum
+#include <Adafruit_NeoPixel.h>
+
+volatile bool g_allowAudio = false; // Start muted (for startup sync)
 
 // ===================================
 // NEW FUNCTION: Calculate Checksum
@@ -112,7 +115,11 @@ void setup() {
     // LED
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
-    delay(1750);
+    
+    // Initialize Blinkies
+    initBlinkies();
+    playStartupSequence();
+    //delay(1750);
 
     // Initialize SPI1 FIRST
     SPI1.setRX(SD_MISO);
@@ -124,7 +131,7 @@ void setup() {
     // Serial2 receives commands and sends acknowledgements
     Serial2.setTX(UART_TX);
     Serial2.setRX(UART_RX);
-    Serial2.begin(9600);
+    Serial2.begin(115200);
     
     
     Serial.println("\n╔═══════════════════════════════════════╗");
@@ -259,15 +266,20 @@ void setup() {
     Serial.println("\n=== Scanning Root Tracks (Legacy) ===");
     scanRootTracks();
     
+    // Enable Audio Output (Unmute)
+    g_allowAudio = true;
+    delay(100);
+
     Serial.println("\n=== System Ready ===");
-    Serial.println("Serial Commands (9600 baud):");
-    Serial.println("  PLAY:1,,5,75   Play Bank 1, Sound 5, Vol 75");
-    Serial.println("  PLAY:2,B,1,80  Play Bank 2, Page B, Sound 1, Vol 80");
+    Serial.println("Serial Commands (115200 baud):");
+    Serial.println("  PLAY:5         Play Bank 1, Sound 5");
+    Serial.println("  PLAY:1,2,B,80  Play Bank 2, Page B, Sound 1, Vol 80");
     Serial.println("  STOP:0           Stop stream 0");
     Serial.println("  STOP:* Stop all streams");
     Serial.println("  VOL:1,50         Set stream 1 volume to 50");
     Serial.println("  LIST             List all banks");
     Serial.println("  CHRP:500,100,500,50"); //CHRP:StartHz,EndHz,DurationMs,Volume
+    Serial.println("  CCRC             Clear sounds from flash ram"); //CHRP:StartHz,EndHz,DurationMs,Volume
 
     Serial.println();
     
@@ -286,6 +298,9 @@ void loop() {
     // Handle serial commands
     processSerialCommands(Serial);   // USB debug
     processSerialCommands(Serial2);  // ESP32 communication
+    
+    // Update Blinkies
+    updateRuntimeLEDs();
     
     // Try to send queued Serial2 messages (up to 5 per loop iteration)
     // Only sends when CPU is not busy with MP3 decoding

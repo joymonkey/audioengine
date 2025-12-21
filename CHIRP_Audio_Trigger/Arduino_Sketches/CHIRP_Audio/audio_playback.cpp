@@ -443,10 +443,22 @@ void setup1() {
 // LOOP1 - Audio Processing (Core 1)
 // ===================================
 void loop1() {
-    i2s.begin(SAMPLE_RATE);
+    bool isRunning = false;
 
     while (true) {
-        Mixer::processSample();
+        if (g_allowAudio) {
+            if (!isRunning) {
+                i2s.begin(SAMPLE_RATE);
+                isRunning = true;
+            }
+            Mixer::processSample();
+        } else {
+            if (isRunning) {
+                i2s.end();
+                isRunning = false;
+            }
+            delay(1);
+        }
     }
 }
 

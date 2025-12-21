@@ -251,6 +251,9 @@ bool syncBank1ToFlash() {
             snprintf(sdPath, sizeof(sdPath), "/%s/%s", bank1DirName, filename);
             snprintf(flashPath, sizeof(flashPath), "/flash/%s", filename);
             
+            // Heartbeat for scanning
+            updateSyncLEDs(false);
+
             bool needsCopy = true;
             mutex_enter_blocking(&sd_mutex);
             FsFile sdFile = sd.open(sdPath, FILE_READ);
@@ -271,6 +274,9 @@ bool syncBank1ToFlash() {
                 }
                 
                 if (needsCopy) {
+                    // Sync File Transition Feedback
+                    updateSyncLEDs(true);
+                    
                     sdFile.rewind();
                     File flashFile = LittleFS.open(flashPath, "w");
                     if (flashFile) {
@@ -285,6 +291,10 @@ bool syncBank1ToFlash() {
                                               CHUNK_SIZE : remaining;
                             
                             int bytesRead = sdFile.read(buffer, toRead);
+                            
+                            // Heartbeat during copy
+                            updateSyncLEDs(false);
+
                             if (bytesRead <= 0) {
                                 Serial.println(" READ ERROR!");
                                 copySuccess = false;
@@ -305,6 +315,16 @@ bool syncBank1ToFlash() {
                         if (copySuccess) {
                             Serial.println("OK");
                             filesCopied++;
+                            
+                            // Success Beep!
+                            g_allowAudio = true; 
+                            delay(5); // Wait for I2S to start
+                            playChirp(2000, 500, 60, 50); // fast chirp
+                            delay(60);
+                            playChirp(2000, 4000, 50, 50); // fast chirp
+                            delay(60); // Wait for chirp (blocking Core 0 is fine here)
+                            g_allowAudio = false; // Mute again
+                            delay(5);
                         }
                     } else {
                         Serial.println(" FAILED to create flash file!");
