@@ -48,7 +48,9 @@ void clearBlinkies() {
     for(int i=0; i<NUM_LEDS; i++) {
         setPixel(i, 0, 0, 0);
     }
-    showBlinkies(); // Force show for clear
+    // Force show for clear, bypassing cpu check
+    blinkies.show(); 
+    needsUpdate = false;
 }
 
 // ===================================
@@ -58,7 +60,7 @@ void initBlinkies() {
     blinkies.begin();
     blinkies.setBrightness(LED_BRIGHTNESS);
     clearBlinkies();
-    showBlinkies();
+    // showBlinkies(); // Removed redundant call
 }
 
 // ===================================
@@ -74,6 +76,37 @@ void playStartupSequence() {
     }
     delay(500);
     clearBlinkies();
+}
+
+// ===================================
+// SD Error Sequence
+// ===================================
+void playErrorSequence() {
+    g_allowAudio = true; // Ensure audio is enabled for chirps
+    int count = 0;
+    while(true) {
+        // Red
+        for(int i=0; i<NUM_LEDS; i++) {
+            blinkies.setPixelColor(i, blinkies.Color(255, 0, 0));
+        }
+        blinkies.show(); // Force show
+        
+        // Chirp first 3 times
+        if (count < 3) {
+            playChirp(1000, 750, 750, 100);
+        }
+        
+        delay(750);
+        
+        // Off
+        for(int i=0; i<NUM_LEDS; i++) {
+            blinkies.setPixelColor(i, 0);
+        }
+        blinkies.show(); // Force show
+        
+        delay(750);
+        count++;
+    }
 }
 
 // ===================================

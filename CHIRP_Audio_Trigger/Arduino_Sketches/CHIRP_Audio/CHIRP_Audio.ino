@@ -173,8 +173,8 @@ void setup() {
         SdSpiConfig slowConfig(SD_CS, DEDICATED_SPI, SD_SCK_MHZ(4), &SPI1);
         if (!sd.begin(slowConfig)) {
             Serial.println("FAILED!");
-            sd.initErrorHalt(&Serial);
-            while (1) { delay(1000); }
+            sd.initErrorPrint(&Serial);
+            playErrorSequence();
         }
         Serial.println("OK (4MHz)");
     } else {
@@ -209,7 +209,7 @@ void setup() {
 
     // Parse INI file *before* scanning banks
     Serial.println("\n=== Reading CHIRP.INI ===");
-    parseIniFile();
+    bool fwUpdated = parseIniFile();
     Serial.printf("Active Bank 1 Page set to: %c\n", activeBank1Page);
                   
     // Scan Bank 1 on SD
@@ -219,7 +219,7 @@ void setup() {
     
     // Sync Bank 1 to Flash
     Serial.println("\n=== Syncing Bank 1 to Flash ===");
-    if (!syncBank1ToFlash()) {
+    if (!syncBank1ToFlash(fwUpdated)) {
         Serial.println("WARNING: Bank 1 sync incomplete");
     }
     

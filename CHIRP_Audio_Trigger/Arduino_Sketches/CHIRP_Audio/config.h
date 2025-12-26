@@ -12,7 +12,7 @@ using namespace libhelix;
 // ===================================
 // Constants
 // ===================================
-#define VERSION_STRING "20251221"
+#define VERSION_STRING "20251223"
 //#define DEBUG // Comment out to disable debug logging
 
 // Hardware Configuration
@@ -253,9 +253,9 @@ void log_message(const String& msg);
 void processSerialCommands(Stream &serial); // Dual-buffer fix
 
 // from file_management.cpp
-void parseIniFile();
+bool parseIniFile();
 void scanBank1();
-bool syncBank1ToFlash();
+bool syncBank1ToFlash(bool fwUpdated);
 void scanSDBanks();
 void scanRootTracks();
 SDBank* findSDBank(uint8_t bank, char page);
@@ -289,6 +289,7 @@ int getQueuedMessageCount();
 // from blinkies.cpp
 void initBlinkies();
 void playStartupSequence();
+void playErrorSequence();
 void updateSyncLEDs(bool fileTransferEvent = false);
 void updateRuntimeLEDs();
 

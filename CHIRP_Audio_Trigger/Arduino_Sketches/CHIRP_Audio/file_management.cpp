@@ -3,8 +3,15 @@
 // ===================================
 // Parse CHIRP.INI File
 // ===================================
-void parseIniFile() {
-    bool found = false;
+bool parseIniFile() {
+    bool foundPage = false;
+    bool foundVersion = false;
+    bool versionMismatch = false;
+    char storedVersion[32] = {0};
+
+    // Need to preserve existing settings if we rewrite
+    // We already read activeBank1Page, that's the only other setting currently.
+
     mutex_enter_blocking(&sd_mutex);
     FsFile iniFile = sd.open("CHIRP.INI", FILE_READ);
     
@@ -27,7 +34,7 @@ void parseIniFile() {
                         while (*(++value) == ' '); // Find first char of value
                         if (*value >= 'A' && *value <= 'Z') {
                             activeBank1Page = *value;
-                            found = true;
+                            foundPage = true;
                         }
                     }
                 }
@@ -38,8 +45,17 @@ void parseIniFile() {
                         while (*(++value) == ' '); // Find first char of value
                         if (*value >= 'A' && *value <= 'Z') {
                             activeBank1Page = *value;
-                            found = true;
+                            foundPage = true;
                         }
+                    }
+                }
+                // Check VERSION
+                else if (strncasecmp(command, "VERSION", 7) == 0) {
+                    char* value = strchr(command, ' ');
+                    if (value) {
+                        while (*(++value) == ' '); // Find first char of value
+                        strncpy(storedVersion, value, sizeof(storedVersion)-1);
+                        foundVersion = true;
                     }
                 }
             }
@@ -47,21 +63,39 @@ void parseIniFile() {
         iniFile.close();
     }
 
-    if (!found) {
-        // File not found or key was missing, create/update it
+    if (foundVersion) {
+         if (strcmp(storedVersion, VERSION_STRING) != 0) {
+            versionMismatch = true;
+            Serial.printf("Firmware update detected! Old: %s, New: %s\n", storedVersion, VERSION_STRING);
+         }
+    } else {
+        versionMismatch = true; // No version found, treat as update/initial
+        Serial.println("No firmware version in INI. Adding it.");
+    }
+
+    // Rewrite INI if needed (missing Page, missing Version, or Version Mismatch)
+    if (!foundPage || versionMismatch) {
         iniFile = sd.open("CHIRP.INI", FILE_WRITE | O_TRUNC);
         if (iniFile) {
             iniFile.println("# CHIRP Configuration File");
             iniFile.println("# Set the active Bank 1 page (A-Z)");
             iniFile.println("# This selects which '1X_...' directory to sync to flash.");
-            iniFile.printf("#BANK1_PAGE %c\n", activeBank1Page); // Write default 'A'
+            iniFile.printf("#BANK1_PAGE %c\n", activeBank1Page); 
+            iniFile.println();
+            iniFile.println("# Firmware Version (Last Booted)");
+            iniFile.println("# Do not edit this manually unless you want to force voice feedback.");
+            iniFile.printf("#VERSION %s\n", VERSION_STRING);
+            
             iniFile.close();
-            Serial.println("CHIRP.INI not found or key missing, created with defaults.");
+            if (!foundPage) Serial.println("CHIRP.INI created/updated with defaults.");
+            else Serial.println("CHIRP.INI updated with new version.");
         } else {
-            Serial.println("ERROR: Could not create CHIRP.INI!");
+            Serial.println("ERROR: Could not create/update CHIRP.INI!");
         }
     }
     mutex_exit(&sd_mutex);
+    
+    return versionMismatch;
 }
 
 
@@ -171,10 +205,90 @@ void scanBank1() {
 // ===================================
 // Sync Bank 1 to Flash
 // ===================================
-bool syncBank1ToFlash() {
+
+// ===================================
+// Voice Feedback Helper
+// ===================================
+void playVoiceFeedback(const char* filename) {
+    char fullPath[64];
+    snprintf(fullPath, sizeof(fullPath), "/0_System/%s", filename);
+    
+    // Check if file exists first
+    bool exists = false;
+    mutex_enter_blocking(&sd_mutex);
+    if (sd.exists(fullPath)) exists = true;
+    mutex_exit(&sd_mutex);
+    
+    if (!exists) return; // Silent fail if file missing (user preference)
+
+    // Unmute
+    g_allowAudio = true;
+    delay(120); // Ramp up (Increased to prevent pop)
+    
+    if (startStream(0, fullPath)) {
+        // Wait for it to finish
+        // Since we are blocking the main loop, we MUST manually pump the audio data!
+        while (streams[0].active) {
+            
+            fillStreamBuffers();
+            
+            // Handle Auto-Stop (Logic normally in main loop)
+            if (streams[0].stopRequested) {
+                stopStream(0);
+                streams[0].stopRequested = false;
+            }
+            // Logic to detect end of file + empty buffer
+            if (streams[0].active && streams[0].fileFinished) {
+                if (streams[0].ringBuffer->availableForRead() == 0) {
+                    stopStream(0);
+                }
+            }
+            
+            delay(1); 
+        }
+    }
+    
+    // Mute again
+    g_allowAudio = false;
+    delay(5);
+}
+
+// Play a number file (0000.wav to 0099.wav)
+// For numbers >= 100, we could implement valid logic or just limit it.
+// Files are named 0000.wav ... 0100.wav based on the listing.
+void playVoiceNumber(int number) {
+    if (number < 0) return;
+    if (number > 100) number = 100; // Cap at 100 for now based on file list
+    
+    char numFile[16];
+    snprintf(numFile, sizeof(numFile), "%04d.wav", number);
+    playVoiceFeedback(numFile);
+}
+
+
+// ===================================
+// Sync Bank 1 to Flash
+// ===================================
+
+// ===================================
+// Sync Bank 1 to Flash
+// ===================================
+bool syncBank1ToFlash(bool fwUpdated) {
     if (bank1DirName[0] == '\0') {
         Serial.println("  Skipping sync: No active Bank 1 directory found.");
         return false;
+    }
+    
+    // Check for Voice Feedback Directory
+    bool hasVoiceFeedback = false;
+    mutex_enter_blocking(&sd_mutex);
+    if (sd.exists("/0_System")) {
+        hasVoiceFeedback = true;
+    }
+    mutex_exit(&sd_mutex);
+
+    if (hasVoiceFeedback) {
+        Serial.println("  Voice Feedback: Enabled");
     }
     
     if (!LittleFS.exists("/flash")) {
@@ -233,9 +347,121 @@ bool syncBank1ToFlash() {
     }
     Serial.println();
     
+    // --- Voice Feedback: Start ---
+    if (hasVoiceFeedback) {
+        
+        // 1. Firmware Update Feedback
+        if (fwUpdated) {
+            playVoiceFeedback("chirp.wav");
+            playVoiceFeedback("audio_engine.wav");
+            delay(200);
+            playVoiceFeedback("firmware.wav");  
+            playVoiceFeedback("updated.wav");
+            playVoiceFeedback("0002.wav");
+            playVoiceFeedback("new_version.wav");
+            delay(200);
+            
+            // Speak version stored in VERSION_STRING (e.g. 20251221)
+            // Skip first 2 digits ("20"), read pairs: "25", "12", "21"
+            if (strlen(VERSION_STRING) >= 8) {
+               // 25
+               int year = (VERSION_STRING[2] - '0') * 10 + (VERSION_STRING[3] - '0');
+               playVoiceNumber(year);
+               delay(100);
+               
+               // 12
+               int month = (VERSION_STRING[4] - '0') * 10 + (VERSION_STRING[5] - '0');
+               playVoiceNumber(month);
+               delay(100);
+               
+               // 21
+               int day = (VERSION_STRING[6] - '0') * 10 + (VERSION_STRING[7] - '0');
+               playVoiceNumber(day);
+               delay(150);
+            }
+        }
+    }
+
+    // --- Count Actual Files to Sync ---
+    int filesToSync = 0;
+    int preCheckProcessed = 0;
+    
+    // We pre-calculate to provide accurate "Syncing X files" voice prompt.
+    // This allows us to say "Syncing 5 files" when 95 are already synced.
+    
+    for (int i = 0; i < bank1SoundCount; i++) {
+        for (int v = 0; v < bank1Sounds[i].variantCount; v++) {
+            preCheckProcessed++;
+            if (DEV_MODE && preCheckProcessed > DEV_SYNC_LIMIT) break;
+
+            const char* filename = bank1Sounds[i].variants[v];
+            char sdPath[64];
+            char flashPath[64];
+            snprintf(sdPath, sizeof(sdPath), "/%s/%s", bank1DirName, filename);
+            snprintf(flashPath, sizeof(flashPath), "/flash/%s", filename);
+
+            bool needsCopy = true;
+            mutex_enter_blocking(&sd_mutex);
+            FsFile sdFile = sd.open(sdPath, FILE_READ);
+            if (sdFile) {
+                size_t sdSize = sdFile.size();
+                if (LittleFS.exists(flashPath)) {
+                    File flashFile = LittleFS.open(flashPath, "r");
+                    if (flashFile) {
+                        size_t flashSize = flashFile.size();
+                        if (flashSize == sdSize) {
+                            needsCopy = false; 
+                        }
+                        flashFile.close();
+                    }
+                }
+                sdFile.close();
+            }
+            mutex_exit(&sd_mutex);
+
+            if (needsCopy) filesToSync++;
+        }
+        if (DEV_MODE && preCheckProcessed > DEV_SYNC_LIMIT) break;
+    }
+    
+    // --- Voice Feedback: Start ---
+    if (hasVoiceFeedback && filesToSync > 0) {
+        // "Syncing"
+        playVoiceFeedback("syncing.wav");
+        delay(100);
+        
+        // "X"
+        playVoiceNumber(filesToSync);
+        delay(100);
+        
+        // "Files"
+        playVoiceFeedback("files.wav");
+        delay(100);
+
+        // "Of"
+        playVoiceFeedback("of.wav");
+        delay(100);
+
+        // "Y"
+        playVoiceNumber(syncLimit);
+        delay(100);
+
+        // "Total"
+        playVoiceFeedback("total.wav");
+        delay(100);
+
+        // "Files"
+        playVoiceFeedback("files.wav");
+        delay(200);
+    } else if (hasVoiceFeedback) {
+        Serial.println("  System in sync. Silent startup.");
+    }
+    
     int filesCopied = 0;
     int filesSkipped = 0;
     int filesProcessed = 0;
+    int filesSyncedSoFar = 0;
+
     for (int i = 0; i < bank1SoundCount; i++) {
         for (int v = 0; v < bank1Sounds[i].variantCount; v++) {
             filesProcessed++;
@@ -255,6 +481,7 @@ bool syncBank1ToFlash() {
             updateSyncLEDs(false);
 
             bool needsCopy = true;
+            bool justCopied = false;
             mutex_enter_blocking(&sd_mutex);
             FsFile sdFile = sd.open(sdPath, FILE_READ);
             if (sdFile) {
@@ -315,16 +542,10 @@ bool syncBank1ToFlash() {
                         if (copySuccess) {
                             Serial.println("OK");
                             filesCopied++;
+                            filesSyncedSoFar++;
+                            justCopied = true;
                             
-                            // Success Beep!
-                            g_allowAudio = true; 
-                            delay(5); // Wait for I2S to start
-                            playChirp(2000, 500, 60, 50); // fast chirp
-                            delay(60);
-                            playChirp(2000, 4000, 50, 50); // fast chirp
-                            delay(60); // Wait for chirp (blocking Core 0 is fine here)
-                            g_allowAudio = false; // Mute again
-                            delay(5);
+                            // Success Feedback moved outside mutex to avoid deadlock
                         }
                     } else {
                         Serial.println(" FAILED to create flash file!");
@@ -337,10 +558,40 @@ bool syncBank1ToFlash() {
             }
             
             mutex_exit(&sd_mutex);
+
+            if (justCopied) {
+                if (hasVoiceFeedback) {
+                    playVoiceNumber(filesSyncedSoFar);
+                } else {
+                    // Original Beeper Feedback
+                    g_allowAudio = true; 
+                    delay(5); // Wait for I2S to start
+                    playChirp(2000, 500, 60, 50); // fast chirp
+                    delay(60);
+                    playChirp(2000, 4000, 50, 50); // fast chirp
+                    delay(60); // Wait for chirp (blocking Core 0 is fine here)
+                    g_allowAudio = false; // Mute again
+                    delay(5);
+                }
+            }
         }
     }
     
 sync_complete:
+    
+    if (hasVoiceFeedback && filesToSync > 0) {
+        delay(200);
+        // "Transfer"
+        playVoiceFeedback("transfer.wav");
+        delay(10);
+        // "Completed" (or "Complete", checking list: complete.wav, completed.wav both exist)
+        // User asked for "file transfer completed", using "completed.wav"
+        playVoiceFeedback("completed.wav"); 
+        delay(100);
+        // "Ready"
+        playVoiceFeedback("ready.wav");
+    }
+
     Serial.printf("\n  Summary: %d copied, %d skipped, %d pruned\n", 
                   filesCopied, filesSkipped, filesDeleted);
     return true;

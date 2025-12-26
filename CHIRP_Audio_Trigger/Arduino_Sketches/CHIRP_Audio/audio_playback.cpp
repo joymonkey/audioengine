@@ -282,6 +282,15 @@ namespace Mixer {
                 // Or stick to int math: volume is float 0..1.0
                 
                 int32_t volFixed = (int32_t)(streams[i].volume * 256.0f);
+                
+                // Ramp Up (Fade In) over 50ms to prevent pops
+                uint32_t elapsed = millis() - streams[i].startTime;
+                if (elapsed < 50) {
+                     int32_t ramp = (elapsed * 256) / 50;
+                     if (ramp > 256) ramp = 256;
+                     volFixed = (volFixed * ramp) >> 8;
+                }
+
                 int32_t gain = (volFixed * masterAttenMultiplier) >> 8; // Result 0..256 approx
                 
                 mixedLeft += ((int32_t)l * gain) >> 8;
